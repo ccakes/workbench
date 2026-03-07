@@ -241,7 +241,7 @@ func (m Model) View() string {
 	rightWidth := m.width - leftWidth
 
 	statusBarHeight := 1
-	mainHeight := m.height - statusBarHeight
+	mainHeight := m.height - statusBarHeight - 1 // -1 to prevent terminal scroll causing duplicate lines
 
 	// Left pane: service list
 	leftContent := m.viewServiceList(leftWidth-4, mainHeight-2)
@@ -274,7 +274,14 @@ func (m Model) View() string {
 
 	statusBar := m.viewStatusBar()
 
-	return lipgloss.JoinVertical(lipgloss.Left, main, statusBar)
+	output := lipgloss.JoinVertical(lipgloss.Left, main, statusBar)
+
+	// Clamp output to terminal height-1 to prevent terminal scroll
+	lines := strings.Split(output, "\n")
+	if len(lines) > m.height-1 {
+		lines = lines[:m.height-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) viewServiceList(width, height int) string {
@@ -332,15 +339,12 @@ func (m Model) viewDetail(width, height int) string {
 	snap := info.Snapshot()
 	svcCfg := m.sup.ServiceConfig(key)
 
-	var b strings.Builder
+	var rows []string
 	title := styleTitle.Render(snap.Name()) + " " + statusStyle(snap.Status.String()).Render(snap.Status.String())
-	b.WriteString(title)
-	b.WriteString("\n")
+	rows = append(rows, title)
 
 	row := func(label, value string) {
-		b.WriteString(styleLabel.Render(fmt.Sprintf("  %-10s", label)))
-		b.WriteString(styleValue.Render(value))
-		b.WriteString("\n")
+		rows = append(rows, styleLabel.Render(fmt.Sprintf("  %-10s", label))+styleValue.Render(value))
 	}
 
 	if snap.PID > 0 {
@@ -375,7 +379,10 @@ func (m Model) viewDetail(width, height int) string {
 		row("Error", truncate(snap.LastError, width-14))
 	}
 
-	return b.String()
+	if len(rows) > height {
+		rows = rows[:height]
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m Model) viewLogs(width, height int) string {
