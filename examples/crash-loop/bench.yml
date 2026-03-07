@@ -1,0 +1,39 @@
+version: 1
+
+global:
+  shutdown_timeout: 3s
+
+services:
+  stable:
+    name: Stable Service
+    dir: .
+    command: echo "stable service running" && sleep 3600
+    restart:
+      policy: never
+
+  crasher:
+    name: Crash Loop
+    dir: .
+    command: echo "starting..." && sleep 1 && exit 1
+    restart:
+      policy: on-failure
+      max_retries: 5
+      backoff: 2s
+
+  always-restart:
+    name: Always Restart
+    dir: .
+    command: echo "running..." && sleep 2
+    restart:
+      policy: always
+      backoff: 1s
+
+  readiness-test:
+    name: Readiness Test
+    dir: .
+    command: echo "booting..." && sleep 2 && echo "server started" && sleep 3600
+    readiness:
+      kind: log_pattern
+      pattern: "server started"
+    restart:
+      policy: on-failure

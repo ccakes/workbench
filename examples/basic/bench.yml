@@ -1,0 +1,40 @@
+version: 1
+
+global:
+  shutdown_timeout: 10s
+  log_buffer_lines: 5000
+  watch_debounce: 300ms
+
+services:
+  api:
+    name: API Server
+    dir: .
+    command: echo "API server running" && sleep 3600
+    env:
+      PORT: "8080"
+      LOG_LEVEL: debug
+    auto_start: true
+    restart:
+      policy: on-failure
+      max_retries: 5
+      backoff: 2s
+
+  worker:
+    name: Background Worker
+    dir: .
+    command: echo "Worker started" && sleep 3600
+    depends_on:
+      - api
+    restart:
+      policy: always
+      backoff: 1s
+
+  web:
+    name: Web Frontend
+    dir: .
+    command:
+      - sh
+      - -c
+      - echo "Web dev server running on :3000" && sleep 3600
+    restart:
+      policy: on-failure

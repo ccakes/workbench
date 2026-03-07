@@ -1,0 +1,39 @@
+version: 1
+
+global:
+  shutdown_timeout: 5s
+  watch_debounce: 500ms
+
+services:
+  api:
+    name: API
+    dir: .
+    command: echo "API started at $(date)" && sleep 3600
+    restart:
+      policy: on-failure
+    watch:
+      enabled: true
+      paths:
+        - .
+      include:
+        - "**/*.go"
+        - "**/*.yaml"
+      ignore:
+        - "**/tmp/**"
+        - "**/.git/**"
+        - "**/vendor/**"
+      debounce: 500ms
+
+  web:
+    dir: .
+    command: echo "Web started at $(date)" && sleep 3600
+    restart:
+      policy: always
+      backoff: 1s
+    watch:
+      enabled: true
+      include:
+        - "src/**"
+        - "*.config.*"
+      ignore:
+        - "dist/**"
