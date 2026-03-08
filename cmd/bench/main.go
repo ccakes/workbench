@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/ccakes/bench/internal/cli"
+	"github.com/ccakes/workbench/internal/cli"
 )
 
 func main() {

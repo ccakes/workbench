@@ -13,8 +13,8 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/spanbuf"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/spanbuf"
 )
 
 // Collector is an OTLP HTTP trace collector.

@@ -3,8 +3,8 @@ package runner
 import (
 	"time"
 
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/logbuf"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/logbuf"
 )
 
 // Runner abstracts process vs container lifecycle management.

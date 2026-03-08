@@ -12,8 +12,8 @@ import (
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/spanbuf"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/spanbuf"
 )
 
 func buildExportRequest(serviceName string, spanName string) *colpb.ExportTraceServiceRequest {

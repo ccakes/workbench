@@ -11,9 +11,9 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/ccakes/bench/internal/config"
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/service"
+	"github.com/ccakes/workbench/internal/config"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/service"
 )
 
 // Restarter is the interface for triggering service restarts.

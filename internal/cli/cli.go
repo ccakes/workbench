@@ -9,14 +9,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ccakes/bench/internal/collector"
-	"github.com/ccakes/bench/internal/config"
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/runner"
-	"github.com/ccakes/bench/internal/spanbuf"
-	"github.com/ccakes/bench/internal/supervisor"
-	"github.com/ccakes/bench/internal/tui"
-	"github.com/ccakes/bench/internal/watcher"
+	"github.com/ccakes/workbench/internal/collector"
+	"github.com/ccakes/workbench/internal/config"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/runner"
+	"github.com/ccakes/workbench/internal/spanbuf"
+	"github.com/ccakes/workbench/internal/supervisor"
+	"github.com/ccakes/workbench/internal/tui"
+	"github.com/ccakes/workbench/internal/watcher"
 )
 
 var Version = "dev"

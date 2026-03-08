@@ -1,4 +1,4 @@
-module github.com/ccakes/bench
+module github.com/ccakes/workbench
 
 go 1.25.0
 

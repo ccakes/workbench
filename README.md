@@ -11,19 +11,20 @@
 - **Independent service control** — start, stop, restart any service without affecting others
 - **Environment management** — inline env vars and .env file loading per service
 - **Dependency ordering** — services start in the right order based on `depends_on`
+- **Embedded OTLP trace collector** — capture and browse OpenTelemetry traces from your services in real time
 - **CLI mode** — non-interactive commands for scripting and automation
 
 ## Install
 
 ```bash
-go install github.com/ccakes/bench/cmd/bench@latest
+go install github.com/ccakes/workbench/cmd/bench@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/ccakes/bench.git
-cd bench
+git clone https://github.com/ccakes/workbench.git
+cd workbench
 go build -o bench ./cmd/bench
 ```
 
@@ -101,6 +102,43 @@ services:
 ```
 
 When a `.go` or `.yaml` file changes under `./api`, only the `api` service restarts. Other services are unaffected.
+
+## Tracing
+
+Workbench includes an embedded OTLP HTTP trace collector. Enable it and your services' traces show up directly in the TUI — no external tooling required.
+
+### Configuration
+
+```yaml
+global:
+  tracing:
+    enabled: true        # default: false
+    port: 4318           # default: 4318
+    buffer_size: 500MB   # default: 500MB, supports B/KB/MB/GB
+```
+
+Point your services' OTLP exporter at `http://localhost:4318/v1/traces` using any OpenTelemetry SDK.
+
+### Trace Browser
+
+Press `t` in the TUI to open the trace browser, which has three views:
+
+**Span List & Details** — Left pane lists captured spans (service, name, duration, status). Right pane shows full span details including trace/span IDs, attributes, and events. Sort by time (`1`), duration (`2`), or service (`3`). Filter with `/`.
+
+**Waterfall Timeline** — Press `Enter` on a span to see its full trace as a timeline waterfall. Spans are drawn as horizontal bars colored by status (green=ok, red=error, gray=unset), sized relative to duration.
+
+**Service Map** — Press `m` to see the service interaction graph showing call counts, average durations, and error counts between services.
+
+| Key | Action |
+|-----|--------|
+| `t` | Toggle trace browser |
+| `j` / `k` | Navigate spans |
+| `Tab` | Switch list / detail panes |
+| `Enter` | Open waterfall for selected trace |
+| `1` / `2` / `3` | Sort by time / duration / service |
+| `/` | Filter spans |
+| `m` | Show service map |
+| `Esc` | Back to previous view |
 
 ## Commands
 

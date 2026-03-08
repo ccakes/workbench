@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/ccakes/bench/internal/spanbuf"
+	"github.com/ccakes/workbench/internal/spanbuf"
 )
 
 func (m Model) handleWaterfallKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

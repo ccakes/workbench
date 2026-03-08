@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ccakes/bench/internal/config"
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/supervisor"
+	"github.com/ccakes/workbench/internal/config"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/supervisor"
 )
 
 func TestDebugPaneHeights(t *testing.T) {

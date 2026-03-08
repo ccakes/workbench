@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ccakes/bench/internal/config"
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/service"
+	"github.com/ccakes/workbench/internal/config"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/service"
 )
 
 // helper: build a config with a single service and sensible test defaults.

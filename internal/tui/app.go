@@ -10,11 +10,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ccakes/bench/internal/events"
-	"github.com/ccakes/bench/internal/logbuf"
-	"github.com/ccakes/bench/internal/service"
-	"github.com/ccakes/bench/internal/spanbuf"
-	"github.com/ccakes/bench/internal/supervisor"
+	"github.com/ccakes/workbench/internal/events"
+	"github.com/ccakes/workbench/internal/logbuf"
+	"github.com/ccakes/workbench/internal/service"
+	"github.com/ccakes/workbench/internal/spanbuf"
+	"github.com/ccakes/workbench/internal/supervisor"
 )
 
 const (
