@@ -1,0 +1,44 @@
+version: 1
+
+services:
+  # Container service — runs Redis in Docker
+  redis:
+    container:
+      image: redis:7-alpine
+      ports: ["6379:6379"]
+      command: ["redis-server", "--save", "60", "1"]
+    env:
+      REDIS_PASSWORD: secret
+    restart:
+      policy: always
+    readiness:
+      kind: tcp
+      address: ":6379"
+
+  # Container service — runs Postgres in Docker
+  postgres:
+    container:
+      image: postgres:16-alpine
+      ports: ["5432:5432"]
+      volumes: ["./pgdata:/var/lib/postgresql/data"]
+    env:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: app
+    restart:
+      policy: always
+    readiness:
+      kind: tcp
+      address: ":5432"
+
+  # Process service — a local API server
+  api:
+    dir: .
+    command: "echo 'API server would start here (demo)'"
+    env:
+      PORT: "8080"
+      DATABASE_URL: "postgres://bench:bench@localhost:5432/app"
+      REDIS_URL: "redis://:secret@localhost:6379"
+    depends_on: [redis, postgres]
+    restart:
+      policy: on-failure

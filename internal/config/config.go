@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -78,10 +79,19 @@ func (c Command) String() string {
 	return fmt.Sprintf("%v", c.Parts)
 }
 
+type ContainerConfig struct {
+	Image   string  `yaml:"image"`
+	Ports   []string `yaml:"ports"`
+	Volumes []string `yaml:"volumes"`
+	Network string  `yaml:"network"`
+	Command Command `yaml:"command"`
+}
+
 type ServiceConfig struct {
 	Name            string            `yaml:"name"`
 	Dir             string            `yaml:"dir"`
-	Command         Command           `yaml:"command"`
+	Command         *Command          `yaml:"command"`
+	Container       *ContainerConfig  `yaml:"container"`
 	Env             map[string]string `yaml:"env"`
 	EnvFile         string            `yaml:"env_file"`
 	AutoStart       *bool             `yaml:"auto_start"`
@@ -92,6 +102,11 @@ type ServiceConfig struct {
 	Labels          map[string]string `yaml:"labels"`
 	StopSignal      string            `yaml:"stop_signal"`
 	ShutdownTimeout *Duration         `yaml:"shutdown_timeout"`
+}
+
+// IsContainer returns true if this service is a container service.
+func (s *ServiceConfig) IsContainer() bool {
+	return s.Container != nil
 }
 
 func (s *ServiceConfig) GetAutoStart() bool {
@@ -182,6 +197,16 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 		}
 		if svc.EnvFile != "" && !filepath.IsAbs(svc.EnvFile) {
 			svc.EnvFile = filepath.Join(baseDir, svc.EnvFile)
+		}
+		if svc.Container != nil {
+			for i, v := range svc.Container.Volumes {
+				// Volumes are "host:container" — resolve host part if relative
+				parts := strings.SplitN(v, ":", 2)
+				if len(parts) == 2 && !filepath.IsAbs(parts[0]) {
+					parts[0] = filepath.Join(baseDir, parts[0])
+					svc.Container.Volumes[i] = parts[0] + ":" + parts[1]
+				}
+			}
 		}
 		cfg.Services[key] = svc
 	}

@@ -60,6 +60,10 @@ type Info struct {
 	LastRestart  string
 	LastError    string
 	WatchEnabled bool
+	ServiceType  string // "process" or "container"
+	ContainerID  string
+	Image        string
+	Ports        []string
 }
 
 func NewInfo(key, displayName string) *Info {
@@ -112,6 +116,10 @@ type Snapshot struct {
 	LastRestart  string
 	LastError    string
 	WatchEnabled bool
+	ServiceType  string
+	ContainerID  string
+	Image        string
+	Ports        []string
 }
 
 func (i *Info) Snapshot() Snapshot {
@@ -129,6 +137,10 @@ func (i *Info) Snapshot() Snapshot {
 		LastRestart:  i.LastRestart,
 		LastError:    i.LastError,
 		WatchEnabled: i.WatchEnabled,
+		ServiceType:  i.ServiceType,
+		ContainerID:  i.ContainerID,
+		Image:        i.Image,
+		Ports:        i.Ports,
 	}
 }
 

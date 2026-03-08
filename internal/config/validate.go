@@ -28,16 +28,45 @@ func (c *Config) Validate() error {
 	for key, svc := range c.Services {
 		prefix := fmt.Sprintf("service %q", key)
 
-		if svc.Dir == "" {
-			errs = append(errs, fmt.Sprintf("%s: dir is required", prefix))
-		} else if info, err := os.Stat(svc.Dir); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: dir %q does not exist", prefix, svc.Dir))
-		} else if !info.IsDir() {
-			errs = append(errs, fmt.Sprintf("%s: dir %q is not a directory", prefix, svc.Dir))
+		hasCommand := svc.Command != nil && len(svc.Command.Parts) > 0
+		hasContainer := svc.Container != nil
+
+		if hasCommand && hasContainer {
+			errs = append(errs, fmt.Sprintf("%s: cannot have both command and container", prefix))
+		} else if !hasCommand && !hasContainer {
+			errs = append(errs, fmt.Sprintf("%s: must have either command or container", prefix))
 		}
 
-		if len(svc.Command.Parts) == 0 {
-			errs = append(errs, fmt.Sprintf("%s: command is required", prefix))
+		if hasContainer {
+			// Container-specific validation
+			if svc.Container.Image == "" {
+				errs = append(errs, fmt.Sprintf("%s: container.image is required", prefix))
+			}
+			for _, p := range svc.Container.Ports {
+				if !strings.Contains(p, ":") {
+					errs = append(errs, fmt.Sprintf("%s: container port %q must contain ':'", prefix, p))
+				}
+			}
+			if svc.Watch.IsEnabled() {
+				errs = append(errs, fmt.Sprintf("%s: watch is not supported for container services", prefix))
+			}
+			// dir is optional for containers
+			if svc.Dir != "" {
+				if info, err := os.Stat(svc.Dir); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: dir %q does not exist", prefix, svc.Dir))
+				} else if !info.IsDir() {
+					errs = append(errs, fmt.Sprintf("%s: dir %q is not a directory", prefix, svc.Dir))
+				}
+			}
+		} else if hasCommand {
+			// Process-specific validation
+			if svc.Dir == "" {
+				errs = append(errs, fmt.Sprintf("%s: dir is required", prefix))
+			} else if info, err := os.Stat(svc.Dir); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: dir %q does not exist", prefix, svc.Dir))
+			} else if !info.IsDir() {
+				errs = append(errs, fmt.Sprintf("%s: dir %q is not a directory", prefix, svc.Dir))
+			}
 		}
 
 		switch svc.Restart.Policy {

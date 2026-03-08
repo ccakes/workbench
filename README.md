@@ -1,6 +1,6 @@
 # bench
 
-> `bench` is a YAML-native terminal UI for running, watching, and supervising local development services, with live process state and integrated logs.
+> `bench` is a terminal UI for running, watching, and supervising local development services, with live process state and integrated logs.
 
 ## Features
 

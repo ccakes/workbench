@@ -1,19 +1,16 @@
 package supervisor
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ccakes/bench/internal/config"
 	"github.com/ccakes/bench/internal/events"
 	"github.com/ccakes/bench/internal/logbuf"
+	"github.com/ccakes/bench/internal/runner"
 	"github.com/ccakes/bench/internal/service"
 )
 
@@ -37,8 +34,8 @@ type managedService struct {
 	restartCh chan string
 	doneCh    chan struct{} // closed when run loop exits
 
-	// process state (only accessed from run loop goroutine)
-	cmd *exec.Cmd
+	// runner state (only accessed from run loop goroutine)
+	r runner.Runner
 
 	running bool // whether the run loop is active
 	mu      sync.Mutex
@@ -63,6 +60,13 @@ func New(cfg *config.Config, bus *events.Bus) *Supervisor {
 		info.WatchEnabled = svcCfg.Watch.IsEnabled()
 		if !svcCfg.GetAutoStart() {
 			info.Status = service.StatusDisabled
+		}
+		if svcCfg.IsContainer() {
+			info.ServiceType = "container"
+			info.Image = svcCfg.Container.Image
+			info.Ports = svcCfg.Container.Ports
+		} else {
+			info.ServiceType = "process"
 		}
 
 		s.services[key] = &managedService{
@@ -289,7 +293,20 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		s.setStatus(ms, service.StatusStarting, "")
 
-		exitCh, err := s.startProcess(ms)
+		// Create a fresh runner for each attempt
+		if ms.cfg.IsContainer() {
+			ms.r = runner.NewContainerRunner(ms.cfg, ms.key)
+		} else {
+			ms.r = runner.NewProcessRunner(ms.cfg)
+		}
+
+		env, err := s.buildEnv(ms)
+		if err != nil {
+			s.setStatus(ms, service.StatusFailed, err.Error())
+			return
+		}
+
+		exitCh, err := ms.r.Start(env, ms.logs, s.bus, ms.key)
 		if err != nil {
 			ms.info.Lock()
 			ms.info.LastError = err.Error()
@@ -312,9 +329,19 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			continue
 		}
 
+		// Update info from runner
+		rInfo := ms.r.Info()
+		ms.info.Lock()
+		ms.info.PID = rInfo.PID
+		ms.info.ContainerID = rInfo.ContainerID
+		ms.info.StartTime = time.Now()
+		ms.info.StopTime = time.Time{}
+		ms.info.LastError = ""
+		ms.info.Unlock()
+
 		s.setStatus(ms, service.StatusRunning, "")
 
-		// Wait for process exit, stop, restart, or context cancel
+		// Wait for exit, stop, restart, or context cancel
 		timeout := ms.cfg.GetShutdownTimeout(s.cfg.Global.ShutdownTimeout)
 
 		select {
@@ -322,6 +349,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			ms.info.Lock()
 			ms.info.ExitCode = exitCode
 			ms.info.PID = 0
+			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.Unlock()
 
@@ -352,9 +380,10 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		case <-ms.stopCh:
 			s.setStatus(ms, service.StatusStopping, "stopping")
-			s.stopProcess(ms, exitCh, timeout)
+			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
 			ms.info.PID = 0
+			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.Unlock()
 			s.setStatus(ms, service.StatusStopped, "stopped")
@@ -362,9 +391,10 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		case reason := <-ms.restartCh:
 			s.setStatus(ms, service.StatusRestarting, reason)
-			s.stopProcess(ms, exitCh, timeout)
+			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
 			ms.info.PID = 0
+			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.RestartCount++
 			ms.info.LastRestart = reason
@@ -373,9 +403,10 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		case <-s.ctx.Done():
 			s.setStatus(ms, service.StatusStopping, "shutting down")
-			s.stopProcess(ms, exitCh, timeout)
+			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
 			ms.info.PID = 0
+			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.Unlock()
 			s.setStatus(ms, service.StatusStopped, "shutdown")
@@ -416,8 +447,14 @@ func (s *Supervisor) waitBackoff(ms *managedService) bool {
 	}
 }
 
-func (s *Supervisor) startProcess(ms *managedService) (<-chan int, error) {
-	env := os.Environ()
+func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
+	var env []string
+
+	// For process services, inherit the full OS environment.
+	// For containers, only pass config-specified env vars.
+	if !ms.cfg.IsContainer() {
+		env = os.Environ()
+	}
 
 	// Load global env file
 	if s.cfg.Global.EnvFile != "" {
@@ -442,86 +479,5 @@ func (s *Supervisor) startProcess(ms *managedService) (<-chan int, error) {
 		env = append(env, k+"="+v)
 	}
 
-	cmd := exec.Command(ms.cfg.Command.Parts[0], ms.cfg.Command.Parts[1:]...)
-	cmd.Dir = ms.cfg.Dir
-	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting process: %w", err)
-	}
-
-	ms.cmd = cmd
-
-	ms.info.Lock()
-	ms.info.PID = cmd.Process.Pid
-	ms.info.StartTime = time.Now()
-	ms.info.StopTime = time.Time{}
-	ms.info.LastError = ""
-	ms.info.Unlock()
-
-	// Read stdout/stderr in background
-	var pipeWg sync.WaitGroup
-	pipeWg.Add(2)
-	go s.readPipe(ms, stdout, "stdout", events.StreamStdout, &pipeWg)
-	go s.readPipe(ms, stderr, "stderr", events.StreamStderr, &pipeWg)
-
-	exitCh := make(chan int, 1)
-	go func() {
-		pipeWg.Wait()
-		err := cmd.Wait()
-		code := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				code = exitErr.ExitCode()
-			} else {
-				code = -1
-			}
-		}
-		exitCh <- code
-	}()
-
-	return exitCh, nil
-}
-
-func (s *Supervisor) readPipe(ms *managedService, r io.ReadCloser, stream string, streamType events.Stream, wg *sync.WaitGroup) {
-	defer wg.Done()
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		ms.logs.Add(stream, line)
-		s.bus.Publish(events.Event{
-			Type:    events.LogLine,
-			Service: ms.key,
-			Data:    events.LogLineData{Stream: streamType, Line: line},
-		})
-	}
-}
-
-// stopProcess sends SIGTERM and waits for the process to exit via exitCh.
-// If it doesn't exit within timeout, it escalates to SIGKILL.
-func (s *Supervisor) stopProcess(ms *managedService, exitCh <-chan int, timeout time.Duration) {
-	if ms.cmd == nil || ms.cmd.Process == nil {
-		return
-	}
-	pid := ms.cmd.Process.Pid
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-
-	select {
-	case <-exitCh:
-		return
-	case <-time.After(timeout):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-exitCh
-	}
+	return env, nil
 }

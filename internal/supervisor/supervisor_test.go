@@ -29,7 +29,7 @@ func singleServiceConfig(t *testing.T, key string, command string, policy string
 		Services: map[string]config.ServiceConfig{
 			key: {
 				Dir: dir,
-				Command: config.Command{
+				Command: &config.Command{
 					Shell: true,
 					Parts: []string{"sh", "-c", command},
 				},
@@ -336,7 +336,7 @@ func TestShutdown(t *testing.T) {
 	makeSvc := func() config.ServiceConfig {
 		return config.ServiceConfig{
 			Dir: dir,
-			Command: config.Command{
+			Command: &config.Command{
 				Shell: true,
 				Parts: []string{"sh", "-c", `trap 'exit 0' TERM; while true; do sleep 0.1; done`},
 			},

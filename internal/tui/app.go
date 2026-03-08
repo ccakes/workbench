@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -249,7 +251,10 @@ func (m Model) View() string {
 	if m.activePane == paneList {
 		leftBorder = styleBorderActive
 	}
-	leftPane := leftBorder.Width(leftWidth - 2).Height(mainHeight - 2).Render(leftContent)
+	leftPane := leftBorder.
+		Width(leftWidth - 2).MaxWidth(leftWidth).
+		Height(mainHeight - 2).MaxHeight(mainHeight).
+		Render(leftContent)
 
 	// Right pane: detail + logs
 	detailHeight := 10
@@ -259,14 +264,20 @@ func (m Model) View() string {
 	logHeight := mainHeight - detailHeight
 
 	detailContent := m.viewDetail(rightWidth-4, detailHeight-2)
-	detailPane := styleBorder.Width(rightWidth - 2).Height(detailHeight - 2).Render(detailContent)
+	detailPane := styleBorder.
+		Width(rightWidth - 2).MaxWidth(rightWidth).
+		Height(detailHeight - 2).MaxHeight(detailHeight).
+		Render(detailContent)
 
 	logContent := m.viewLogs(rightWidth-4, logHeight-2)
 	logBorder := styleBorder
 	if m.activePane == paneLogs {
 		logBorder = styleBorderActive
 	}
-	logPane := logBorder.Width(rightWidth - 2).Height(logHeight - 2).Render(logContent)
+	logPane := logBorder.
+		Width(rightWidth - 2).MaxWidth(rightWidth).
+		Height(logHeight - 2).MaxHeight(logHeight).
+		Render(logContent)
 
 	rightPane := lipgloss.JoinVertical(lipgloss.Left, detailPane, logPane)
 
@@ -301,17 +312,26 @@ func (m Model) viewServiceList(width, height int) string {
 
 		indicator := statusIndicator(snap.Status.String())
 		name := snap.Name()
+		displayName := name
 		status := snap.Status.String()
 		styledStatus := statusStyle(status).Render(status)
 
 		uptime := ""
 		if snap.Status.IsRunning() {
-			uptime = formatDuration(snap.Uptime())
+			uptime = " " + formatDuration(snap.Uptime())
 		}
 
-		line := fmt.Sprintf(" %s %-*s %s", indicator, max(1, width-20), truncate(name, width-20), styledStatus)
+		// Calculate name column width to fill the line.
+		// indicator (2) + spaces (3) + name + status + uptime must fit in width.
+		suffixLen := len(status) + len(uptime)
+		nameWidth := max(1, width-suffixLen-5) // 5 = " " + indicator + " " + " " before status + margin
+		truncatedName := truncate(displayName, nameWidth)
+		// Pad name with spaces (plain text, so len() == visual width)
+		padded := truncatedName + strings.Repeat(" ", max(0, nameWidth-len(truncatedName)))
+
+		line := " " + indicator + " " + padded + " " + styledStatus
 		if uptime != "" {
-			line += " " + styleLabel.Render(uptime)
+			line += styleLabel.Render(uptime)
 		}
 
 		if i == m.selected {
@@ -343,16 +363,34 @@ func (m Model) viewDetail(width, height int) string {
 	title := styleTitle.Render(snap.Name()) + " " + statusStyle(snap.Status.String()).Render(snap.Status.String())
 	rows = append(rows, title)
 
+	// Label prefix "  %-10s" = 12 visual chars; value gets the rest
+	maxVal := max(1, width-12)
 	row := func(label, value string) {
-		rows = append(rows, styleLabel.Render(fmt.Sprintf("  %-10s", label))+styleValue.Render(value))
+		rows = append(rows, styleLabel.Render(fmt.Sprintf("  %-10s", label))+styleValue.Render(truncate(value, maxVal)))
 	}
 
-	if snap.PID > 0 {
-		row("PID", fmt.Sprintf("%d", snap.PID))
+	if svcCfg != nil && snap.ServiceType == "container" {
+		if snap.ContainerID != "" {
+			row("Container", snap.ContainerID)
+		}
+		if snap.Image != "" {
+			row("Image", snap.Image)
+		}
+		if len(snap.Ports) > 0 {
+			row("Ports", strings.Join(snap.Ports, ", "))
+		}
+	} else {
+		if snap.PID > 0 {
+			row("PID", fmt.Sprintf("%d", snap.PID))
+		}
+		if svcCfg != nil {
+			row("Dir", svcCfg.Dir)
+			if svcCfg.Command != nil {
+				row("Command", svcCfg.Command.String())
+			}
+		}
 	}
 	if svcCfg != nil {
-		row("Dir", svcCfg.Dir)
-		row("Command", svcCfg.Command.String())
 		if svcCfg.EnvFile != "" {
 			row("Env File", svcCfg.EnvFile)
 		}
@@ -373,10 +411,10 @@ func (m Model) viewDetail(width, height int) string {
 		row("Exit Code", fmt.Sprintf("%d", snap.ExitCode))
 	}
 	if snap.LastRestart != "" {
-		row("Last", truncate(snap.LastRestart, width-14))
+		row("Last", snap.LastRestart)
 	}
 	if snap.LastError != "" && snap.Status == service.StatusFailed {
-		row("Error", truncate(snap.LastError, width-14))
+		row("Error", snap.LastError)
 	}
 
 	if len(rows) > height {
@@ -555,13 +593,13 @@ func truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if len(s) <= maxLen {
+	if ansi.StringWidth(s) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return ansi.Truncate(s, maxLen, "")
 	}
-	return s[:maxLen-3] + "..."
+	return ansi.Truncate(s, maxLen-3, "") + "..."
 }
 
 func formatDuration(d time.Duration) string {

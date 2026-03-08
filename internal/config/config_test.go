@@ -447,7 +447,7 @@ func TestValidate_UnsupportedVersion(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 			},
 		},
@@ -464,7 +464,7 @@ func TestValidate_MissingDir(t *testing.T) {
 		Version: 1,
 		Services: map[string]ServiceConfig{
 			"app": {
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 			},
 		},
@@ -482,7 +482,7 @@ func TestValidate_DirNotExist(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     "/nonexistent/path/that/does/not/exist",
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 			},
 		},
@@ -505,7 +505,7 @@ func TestValidate_DirIsFile(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     f,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 			},
 		},
@@ -532,7 +532,7 @@ func TestValidate_MissingCommand(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for missing command")
 	}
-	assertContains(t, err.Error(), "command is required")
+	assertContains(t, err.Error(), "must have either command or container")
 }
 
 func TestValidate_InvalidRestartPolicy(t *testing.T) {
@@ -542,7 +542,7 @@ func TestValidate_InvalidRestartPolicy(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "invalid-policy"},
 			},
 		},
@@ -563,7 +563,7 @@ func TestValidate_ValidRestartPolicies(t *testing.T) {
 				Services: map[string]ServiceConfig{
 					"app": {
 						Dir:     dir,
-						Command: Command{Parts: []string{"echo"}},
+						Command: &Command{Parts: []string{"echo"}},
 						Restart: RestartConfig{Policy: policy},
 					},
 				},
@@ -583,7 +583,7 @@ func TestValidate_UnknownDependsOn(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"nonexistent"},
 			},
@@ -603,13 +603,13 @@ func TestValidate_CycleDetection(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"a": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"b"},
 			},
 			"b": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"a"},
 			},
@@ -629,7 +629,7 @@ func TestValidate_SelfCycle(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"a": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"a"},
 			},
@@ -649,19 +649,19 @@ func TestValidate_ThreeNodeCycle(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"a": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"b"},
 			},
 			"b": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"c"},
 			},
 			"c": {
 				Dir:       dir,
-				Command:   Command{Parts: []string{"echo"}},
+				Command:   &Command{Parts: []string{"echo"}},
 				Restart:   RestartConfig{Policy: "never"},
 				DependsOn: []string{"a"},
 			},
@@ -681,7 +681,7 @@ func TestValidate_EnvFileMissing(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 				EnvFile: filepath.Join(dir, "nonexistent.env"),
 			},
@@ -706,7 +706,7 @@ func TestValidate_EnvFileExists(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 				EnvFile: envPath,
 			},
@@ -727,7 +727,7 @@ func TestValidate_GlobalEnvFileMissing(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"app": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"echo"}},
+				Command: &Command{Parts: []string{"echo"}},
 				Restart: RestartConfig{Policy: "never"},
 			},
 		},
@@ -763,7 +763,7 @@ func TestValidate_ReadinessKinds(t *testing.T) {
 				Services: map[string]ServiceConfig{
 					"app": {
 						Dir:       dir,
-						Command:   Command{Parts: []string{"echo"}},
+						Command:   &Command{Parts: []string{"echo"}},
 						Restart:   RestartConfig{Policy: "never"},
 						Readiness: tt.readiness,
 					},
@@ -827,12 +827,12 @@ func TestValidate_FullyValid(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"db": {
 				Dir:     dir,
-				Command: Command{Parts: []string{"postgres"}},
+				Command: &Command{Parts: []string{"postgres"}},
 				Restart: RestartConfig{Policy: "always"},
 			},
 			"api": {
 				Dir:       dir,
-				Command:   Command{Shell: true, Parts: []string{"sh", "-c", "go run ."}},
+				Command:   &Command{Shell: true, Parts: []string{"sh", "-c", "go run ."}},
 				Restart:   RestartConfig{Policy: "on-failure"},
 				DependsOn: []string{"db"},
 			},
@@ -852,9 +852,9 @@ func TestStartOrder_NoDeps(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Services: map[string]ServiceConfig{
-			"alpha": {Dir: dir, Command: Command{Parts: []string{"a"}}, Restart: RestartConfig{Policy: "never"}},
-			"beta":  {Dir: dir, Command: Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}},
-			"gamma": {Dir: dir, Command: Command{Parts: []string{"c"}}, Restart: RestartConfig{Policy: "never"}},
+			"alpha": {Dir: dir, Command: &Command{Parts: []string{"a"}}, Restart: RestartConfig{Policy: "never"}},
+			"beta":  {Dir: dir, Command: &Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}},
+			"gamma": {Dir: dir, Command: &Command{Parts: []string{"c"}}, Restart: RestartConfig{Policy: "never"}},
 		},
 	}
 	order, err := cfg.StartOrder()
@@ -878,9 +878,9 @@ func TestStartOrder_LinearDeps(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Services: map[string]ServiceConfig{
-			"app": {Dir: dir, Command: Command{Parts: []string{"a"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"api"}},
-			"api": {Dir: dir, Command: Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"db"}},
-			"db":  {Dir: dir, Command: Command{Parts: []string{"c"}}, Restart: RestartConfig{Policy: "never"}},
+			"app": {Dir: dir, Command: &Command{Parts: []string{"a"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"api"}},
+			"api": {Dir: dir, Command: &Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"db"}},
+			"db":  {Dir: dir, Command: &Command{Parts: []string{"c"}}, Restart: RestartConfig{Policy: "never"}},
 		},
 	}
 	order, err := cfg.StartOrder()
@@ -918,10 +918,10 @@ func TestStartOrder_DiamondDeps(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Services: map[string]ServiceConfig{
-			"top":    {Dir: dir, Command: Command{Parts: []string{"t"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"left", "right"}},
-			"left":   {Dir: dir, Command: Command{Parts: []string{"l"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"bottom"}},
-			"right":  {Dir: dir, Command: Command{Parts: []string{"r"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"bottom"}},
-			"bottom": {Dir: dir, Command: Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}},
+			"top":    {Dir: dir, Command: &Command{Parts: []string{"t"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"left", "right"}},
+			"left":   {Dir: dir, Command: &Command{Parts: []string{"l"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"bottom"}},
+			"right":  {Dir: dir, Command: &Command{Parts: []string{"r"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"bottom"}},
+			"bottom": {Dir: dir, Command: &Command{Parts: []string{"b"}}, Restart: RestartConfig{Policy: "never"}},
 		},
 	}
 	order, err := cfg.StartOrder()
@@ -960,7 +960,7 @@ func TestStartOrder_SingleService(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Services: map[string]ServiceConfig{
-			"only": {Dir: dir, Command: Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}},
+			"only": {Dir: dir, Command: &Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}},
 		},
 	}
 	order, err := cfg.StartOrder()
@@ -977,8 +977,8 @@ func TestStartOrder_CycleReturnsError(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Services: map[string]ServiceConfig{
-			"a": {Dir: dir, Command: Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"b"}},
-			"b": {Dir: dir, Command: Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"a"}},
+			"a": {Dir: dir, Command: &Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"b"}},
+			"b": {Dir: dir, Command: &Command{Parts: []string{"x"}}, Restart: RestartConfig{Policy: "never"}, DependsOn: []string{"a"}},
 		},
 	}
 	_, err := cfg.StartOrder()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ccakes/bench/internal/config"
 	"github.com/ccakes/bench/internal/events"
+	"github.com/ccakes/bench/internal/runner"
 	"github.com/ccakes/bench/internal/supervisor"
 	"github.com/ccakes/bench/internal/tui"
 	"github.com/ccakes/bench/internal/watcher"
@@ -104,6 +105,17 @@ func runUp(args []string) int {
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config validation failed:\n%v\n", err)
 		return 1
+	}
+
+	// Check Docker availability if any container services exist
+	for _, svc := range cfg.Services {
+		if svc.IsContainer() {
+			if err := runner.CheckDocker(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			break
+		}
 	}
 
 	bus := events.NewBus()
@@ -302,9 +314,10 @@ func runStatus(args []string) int {
 
 	// Table output
 	order, _ := cfg.StartOrder()
-	fmt.Printf("%-20s %-12s %-10s %s\n", "SERVICE", "STATUS", "RESTARTS", "COMMAND")
-	fmt.Printf("%-20s %-12s %-10s %s\n",
+	fmt.Printf("%-20s %-10s %-12s %-10s %s\n", "SERVICE", "TYPE", "STATUS", "RESTARTS", "COMMAND/IMAGE")
+	fmt.Printf("%-20s %-10s %-12s %-10s %s\n",
 		strings.Repeat("-", 20),
+		strings.Repeat("-", 10),
 		strings.Repeat("-", 12),
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 30))
@@ -315,11 +328,20 @@ func runStatus(args []string) int {
 		if !svc.GetAutoStart() {
 			status = "disabled"
 		}
-		fmt.Printf("%-20s %-12s %-10s %s\n",
+		svcType := "process"
+		cmdStr := ""
+		if svc.IsContainer() {
+			svcType = "container"
+			cmdStr = svc.Container.Image
+		} else if svc.Command != nil {
+			cmdStr = svc.Command.String()
+		}
+		fmt.Printf("%-20s %-10s %-12s %-10s %s\n",
 			key,
+			svcType,
 			status,
 			"-",
-			svc.Command.String())
+			cmdStr)
 	}
 	return 0
 }
@@ -327,20 +349,31 @@ func runStatus(args []string) int {
 func statusJSON(cfg *config.Config) int {
 	type svcStatus struct {
 		Key       string `json:"key"`
-		Command   string `json:"command"`
-		Dir       string `json:"dir"`
+		Type      string `json:"type"`
+		Command   string `json:"command,omitempty"`
+		Image     string `json:"image,omitempty"`
+		Dir       string `json:"dir,omitempty"`
 		AutoStart bool   `json:"auto_start"`
 	}
 	var services []svcStatus
 	order, _ := cfg.StartOrder()
 	for _, key := range order {
 		svc := cfg.Services[key]
-		services = append(services, svcStatus{
+		s := svcStatus{
 			Key:       key,
-			Command:   svc.Command.String(),
 			Dir:       svc.Dir,
 			AutoStart: svc.GetAutoStart(),
-		})
+		}
+		if svc.IsContainer() {
+			s.Type = "container"
+			s.Image = svc.Container.Image
+		} else {
+			s.Type = "process"
+			if svc.Command != nil {
+				s.Command = svc.Command.String()
+			}
+		}
+		services = append(services, s)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -432,12 +465,16 @@ func runValidate(args []string) int {
 	fmt.Printf("start order: %s\n", strings.Join(order, " -> "))
 	for _, key := range order {
 		svc := cfg.Services[key]
+		svcType := "process"
+		if svc.IsContainer() {
+			svcType = "container"
+		}
 		watch := "off"
 		if svc.Watch.IsEnabled() {
 			watch = "on"
 		}
-		fmt.Printf("  %-20s dir=%-30s watch=%s restart=%s\n",
-			key, svc.Dir, watch, svc.Restart.Policy)
+		fmt.Printf("  %-20s type=%-10s dir=%-30s watch=%s restart=%s\n",
+			key, svcType, svc.Dir, watch, svc.Restart.Policy)
 	}
 	return 0
 }
