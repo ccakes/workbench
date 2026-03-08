@@ -26,14 +26,28 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 | `log_buffer_lines` | integer | `5000` | Max log lines kept per service |
 | `watch_debounce` | duration | `300ms` | Default debounce for file watchers |
 | `env_file` | path | | Global .env file loaded for all services |
+| `tracing` | object | | Tracing configuration |
+
+#### Tracing
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable embedded OTLP trace collector |
+| `port` | integer | `4318` | HTTP port for the OTLP collector |
+| `buffer_size` | byte size | `500MB` | Max memory for stored spans |
+
+When enabled, workbench starts an OTLP HTTP collector on the configured port. Services that export traces to `http://localhost:<port>/v1/traces` will have their spans captured and viewable in the TUI trace browser (press `t`).
+
+Byte sizes use human-readable format: `100MB`, `1GB`, etc.
 
 ### Service
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `name` | string | key | Display name shown in TUI |
-| `dir` | path | **required** | Working directory for the process |
-| `command` | string or string[] | **required** | Command to execute |
+| `dir` | path | **required**\* | Working directory for the process |
+| `command` | string or string[] | **required**\* | Command to execute |
+| `container` | object | | Container configuration (see below) |
 | `env` | map | | Inline environment variables |
 | `env_file` | path | | Path to .env file |
 | `auto_start` | bool | `true` | Start automatically with `bench up` |
@@ -44,6 +58,10 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 | `labels` | map | | Arbitrary key-value labels |
 | `stop_signal` | string | `SIGTERM` | Signal sent on stop |
 | `shutdown_timeout` | duration | global | Override global shutdown timeout |
+
+\* `dir` and `command` are required for process-based services. For container-based services, use the `container` field instead.
+
+A service is either **process-based** (has `command`) or **container-based** (has `container`). The two are mutually exclusive.
 
 #### Command formats
 
@@ -58,6 +76,38 @@ command:
   - npm
   - run
   - dev
+```
+
+### Container
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `image` | string | **required** | Docker image to run |
+| `ports` | string[] | | Port mappings (`host:container` or `host_ip:host:container`) |
+| `volumes` | string[] | | Volume mounts (`host:container`). Relative host paths resolve from config file directory |
+| `network` | string | | Docker network to connect to |
+| `command` | string or string[] | | Override container entrypoint/command |
+
+Container services are managed via Docker. workbench handles the full lifecycle: pulling, starting, log streaming, and cleanup. Environment variables from `env` and `env_file` are passed to the container via `-e` flags.
+
+```yaml
+services:
+  postgres:
+    container:
+      image: postgres:16-alpine
+      ports:
+        - 127.0.0.1:5432:5432
+      volumes:
+        - ./pgdata:/var/lib/postgresql/data
+    env:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: app
+    restart:
+      policy: always
+    readiness:
+      kind: tcp
+      address: ":5432"
 ```
 
 ### Restart
@@ -132,6 +182,10 @@ global:
   log_buffer_lines: 5000
   watch_debounce: 300ms
   env_file: .env
+  tracing:
+    enabled: true
+    port: 4318
+    buffer_size: 500MB
 
 services:
   api:
@@ -189,4 +243,30 @@ services:
       policy: on-failure
     watch:
       enabled: false
+
+  # Container-based services
+  postgres:
+    container:
+      image: postgres:16-alpine
+      ports:
+        - 127.0.0.1:5432:5432
+      volumes:
+        - ./pgdata:/var/lib/postgresql/data
+    env:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: app
+    restart:
+      policy: always
+    readiness:
+      kind: tcp
+      address: ":5432"
+
+  redis:
+    container:
+      image: redis:7-alpine
+      ports:
+        - 127.0.0.1:6379:6379
+    restart:
+      policy: always
 ```

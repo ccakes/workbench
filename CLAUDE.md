@@ -41,3 +41,7 @@ internal/
 
 - **Always use visual width, not byte length, for string measurement.** Process output often contains ANSI escape codes (colored logs from Gradle, Spring Boot, etc.). Use `ansi.StringWidth()` and `ansi.Truncate()` from `charmbracelet/x/ansi` — never `len()` — when calculating display widths or truncating strings for the TUI. Using byte length causes lines to overflow their panes and break the layout.
 - The `truncate()` helper in `tui/app.go` handles this correctly — use it for all width-limited text.
+
+## Documentation
+
+When adding new features, make sure to write a simple markdown document for them under `docs/`. Also when making changes, always check whether any existing documentation needs to be updated.

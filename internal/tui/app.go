@@ -638,9 +638,14 @@ func (m Model) viewHelp() string {
 		{"g", "Scroll to top of logs"},
 		{"G", "Scroll to bottom of logs (follow)"},
 		{"/", "Search/filter logs"},
-		{"?", "Toggle this help"},
-		{"q", "Quit"},
 	}
+	if m.store != nil {
+		bindings = append(bindings, struct{ key, desc string }{"t", "Open trace browser"})
+	}
+	bindings = append(bindings,
+		struct{ key, desc string }{"?", "Toggle this help"},
+		struct{ key, desc string }{"q", "Quit"},
+	)
 
 	for _, b2 := range bindings {
 		fmt.Fprintf(&b, "  %s  %s\n",
