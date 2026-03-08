@@ -4,7 +4,7 @@
 
 ### "no bench.yml found in current or parent directories"
 
-bench searches for `bench.yml` or `bench.yaml` starting from the current directory and walking up to the filesystem root. Either:
+workbench searches for `bench.yml` or `bench.yaml` starting from the current directory and walking up to the filesystem root. Either:
 - Create a `bench.yml` in your project
 - Use `--config <path>` to specify the location explicitly
 
@@ -58,7 +58,7 @@ Check:
 
 ### Service won't stop (hangs on stopping)
 
-bench sends SIGTERM to the process group, then waits `shutdown_timeout` before escalating to SIGKILL. If stopping seems slow:
+workbench sends SIGTERM to the process group, then waits `shutdown_timeout` before escalating to SIGKILL. If stopping seems slow:
 - Reduce `shutdown_timeout` (per-service or global)
 - Ensure the service handles SIGTERM properly
 - Check if the service spawns child processes that don't forward signals
@@ -72,7 +72,7 @@ bench sends SIGTERM to the process group, then waits `shutdown_timeout` before e
 
 ### Dependency cycle detected
 
-bench validates the `depends_on` graph at startup. If you see a cycle error, check your dependency chain. For example:
+workbench validates the `depends_on` graph at startup. If you see a cycle error, check your dependency chain. For example:
 
 ```
 dependency cycle detected: a -> b -> c -> a

@@ -17,10 +17,11 @@ type Config struct {
 }
 
 type GlobalConfig struct {
-	ShutdownTimeout Duration `yaml:"shutdown_timeout"`
-	LogBufferLines  int      `yaml:"log_buffer_lines"`
-	WatchDebounce   Duration `yaml:"watch_debounce"`
-	EnvFile         string   `yaml:"env_file"`
+	ShutdownTimeout Duration      `yaml:"shutdown_timeout"`
+	LogBufferLines  int           `yaml:"log_buffer_lines"`
+	WatchDebounce   Duration      `yaml:"watch_debounce"`
+	EnvFile         string        `yaml:"env_file"`
+	Tracing         TracingConfig `yaml:"tracing"`
 }
 
 // Duration wraps time.Duration for YAML unmarshaling from strings like "10s".
@@ -42,7 +43,7 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 func (d Duration) MarshalYAML() (interface{}, error) {
-	return d.Duration.String(), nil
+	return d.String(), nil
 }
 
 // Command handles the YAML command field being either a string or string array.
@@ -175,6 +176,121 @@ type ReadinessConfig struct {
 	InitialDelay Duration `yaml:"initial_delay"`
 }
 
+type TracingConfig struct {
+	Enabled    bool     `yaml:"enabled"`
+	Port       int      `yaml:"port"`
+	BufferSize ByteSize `yaml:"buffer_size"`
+}
+
+// ByteSize parses human-readable byte sizes like "500MB", "1GB".
+type ByteSize int64
+
+func (b *ByteSize) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return err
+	}
+	parsed, err := parseByteSize(s)
+	if err != nil {
+		return err
+	}
+	*b = ByteSize(parsed)
+	return nil
+}
+
+func (b ByteSize) MarshalYAML() (interface{}, error) {
+	return formatByteSize(int64(b)), nil
+}
+
+func parseByteSize(s string) (int64, error) {
+	s = trimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty byte size")
+	}
+	// Find where digits end and suffix begins
+	i := 0
+	for i < len(s) && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.') {
+		i++
+	}
+	numStr := s[:i]
+	suffix := s[i:]
+	if numStr == "" {
+		return 0, fmt.Errorf("invalid byte size %q: no number", s)
+	}
+
+	// Parse as float to handle decimals like "1.5GB"
+	var num float64
+	for j, c := range numStr {
+		if c == '.' {
+			intPart := numStr[:j]
+			fracPart := numStr[j+1:]
+			ip := parseUint(intPart)
+			fp := parseUint(fracPart)
+			divisor := 1.0
+			for range fracPart {
+				divisor *= 10
+			}
+			num = float64(ip) + float64(fp)/divisor
+			break
+		}
+		if j == len(numStr)-1 {
+			num = float64(parseUint(numStr))
+		}
+	}
+
+	// Normalize suffix
+	suffix = trimSpace(suffix)
+	upper := ""
+	for _, c := range suffix {
+		if c >= 'a' && c <= 'z' {
+			upper += string(c - 32)
+		} else {
+			upper += string(c)
+		}
+	}
+
+	var multiplier int64
+	switch upper {
+	case "", "B":
+		multiplier = 1
+	case "KB", "K":
+		multiplier = 1024
+	case "MB", "M":
+		multiplier = 1024 * 1024
+	case "GB", "G":
+		multiplier = 1024 * 1024 * 1024
+	case "TB", "T":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("invalid byte size suffix %q in %q", suffix, s)
+	}
+
+	return int64(num * float64(multiplier)), nil
+}
+
+func parseUint(s string) int64 {
+	var n int64
+	for _, c := range s {
+		n = n*10 + int64(c-'0')
+	}
+	return n
+}
+
+func formatByteSize(b int64) string {
+	switch {
+	case b >= 1024*1024*1024*1024:
+		return fmt.Sprintf("%dTB", b/(1024*1024*1024*1024))
+	case b >= 1024*1024*1024:
+		return fmt.Sprintf("%dGB", b/(1024*1024*1024))
+	case b >= 1024*1024:
+		return fmt.Sprintf("%dMB", b/(1024*1024))
+	case b >= 1024:
+		return fmt.Sprintf("%dKB", b/1024)
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
+}
+
 // Load reads and parses a config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -225,6 +341,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Global.WatchDebounce.Duration == 0 {
 		c.Global.WatchDebounce.Duration = 300 * time.Millisecond
+	}
+	if c.Global.Tracing.Port == 0 {
+		c.Global.Tracing.Port = 4318
+	}
+	if c.Global.Tracing.BufferSize == 0 {
+		c.Global.Tracing.BufferSize = ByteSize(500 * 1024 * 1024)
 	}
 	for key, svc := range c.Services {
 		if svc.Restart.Policy == "" {

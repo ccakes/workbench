@@ -52,6 +52,16 @@ var (
 	styleHelpKey = lipgloss.NewStyle().
 			Foreground(colorCyan).
 			Bold(true)
+
+	// Trace view styles
+	styleSpanOK    = lipgloss.NewStyle().Foreground(colorGreen)
+	styleSpanError = lipgloss.NewStyle().Foreground(colorRed)
+
+	styleWaterfallBar = lipgloss.NewStyle().Foreground(colorBlue)
+
+	styleServiceMapNode = lipgloss.NewStyle().
+				Foreground(colorCyan).
+				Bold(true)
 )
 
 func statusStyle(status string) lipgloss.Style {

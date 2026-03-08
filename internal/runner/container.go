@@ -32,7 +32,7 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 
 	// Clean up any stale container with same name
 	cleanup := exec.Command("docker", "rm", "-f", r.name)
-	cleanup.Run() // ignore errors — container may not exist
+	_ = cleanup.Run() // ignore errors — container may not exist
 
 	// Build docker run args
 	args := []string{"run", "-d", "--name", r.name, "--label", "managed-by=bench"}
@@ -69,9 +69,7 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 		return nil, fmt.Errorf("docker run: %w", err)
 	}
 	r.containerID = strings.TrimSpace(string(out))
-	if len(r.containerID) > 12 {
-		// Store full ID but display short
-	}
+	// containerID stores the full ID; Info() returns the short form
 
 	// Stream logs
 	r.logCmd = exec.Command("docker", "logs", "--follow", r.containerID)
@@ -106,13 +104,13 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 			code = -1
 		} else {
 			trimmed := strings.TrimSpace(string(out))
-			fmt.Sscanf(trimmed, "%d", &code)
+			_, _ = fmt.Sscanf(trimmed, "%d", &code)
 		}
 
 		// Clean up log follower
 		if r.logCmd.Process != nil {
-			r.logCmd.Process.Kill()
-			r.logCmd.Wait()
+			_ = r.logCmd.Process.Kill()
+			_ = r.logCmd.Wait()
 		}
 
 		exitCh <- code
@@ -128,20 +126,20 @@ func (r *ContainerRunner) Stop(exitCh <-chan int, timeout time.Duration) {
 
 	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
 	stopCmd := exec.Command("docker", "stop", "-t", timeoutSecs, r.containerID)
-	stopCmd.Run()
+	_ = stopCmd.Run()
 
 	// Wait for exit with a grace period beyond the docker stop timeout
 	select {
 	case <-exitCh:
 	case <-time.After(timeout + 5*time.Second):
 		killCmd := exec.Command("docker", "kill", r.containerID)
-		killCmd.Run()
+		_ = killCmd.Run()
 		<-exitCh
 	}
 
 	// Remove container
 	rmCmd := exec.Command("docker", "rm", r.containerID)
-	rmCmd.Run()
+	_ = rmCmd.Run()
 }
 
 func (r *ContainerRunner) Info() RunnerInfo {

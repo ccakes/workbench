@@ -2,7 +2,7 @@
 
 ## Overview
 
-bench is structured as a layered system where the TUI is a view over runtime state, not the owner of it.
+workbench is structured as a layered system where the TUI is a view over runtime state, not the owner of it.
 
 ```
 ┌──────────────────────────────────┐

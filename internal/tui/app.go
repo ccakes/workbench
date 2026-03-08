@@ -13,6 +13,7 @@ import (
 	"github.com/ccakes/bench/internal/events"
 	"github.com/ccakes/bench/internal/logbuf"
 	"github.com/ccakes/bench/internal/service"
+	"github.com/ccakes/bench/internal/spanbuf"
 	"github.com/ccakes/bench/internal/supervisor"
 )
 
@@ -21,8 +22,14 @@ const (
 	paneLogs
 )
 
+const (
+	viewModeServices = iota
+	viewModeTraces
+)
+
 type Model struct {
 	sup      *supervisor.Supervisor
+	store    *spanbuf.Store
 	eventCh  chan events.Event
 	services []string
 
@@ -38,15 +45,28 @@ type Model struct {
 
 	searchMode  bool
 	searchQuery string
+
+	// Trace view state
+	viewMode       int
+	traceSelected  int
+	tracePane      int // 0=span list, 1=span detail
+	traceSpans     []spanbuf.Span
+	traceFilter    string
+	traceFilterMode bool
+	traceSortMode  int // 0=time, 1=duration, 2=service
+	waterfallMode  bool
+	waterfallSpans []spanbuf.Span
+	serviceMapMode bool
 }
 
 type eventMsg events.Event
 type tickMsg time.Time
 
-func NewModel(sup *supervisor.Supervisor) Model {
+func NewModel(sup *supervisor.Supervisor, store *spanbuf.Store) Model {
 	ch := sup.Bus().Subscribe(256)
 	return Model{
 		sup:       sup,
+		store:     store,
 		eventCh:   ch,
 		services:  sup.ServiceKeys(),
 		logFollow: true,
@@ -84,12 +104,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.searchMode {
+		if m.searchMode || m.traceFilterMode {
 			return m.handleSearchKey(msg)
 		}
 		if m.showHelp {
 			m.showHelp = false
 			return m, nil
+		}
+		if m.viewMode == viewModeTraces {
+			return m.handleTraceKey(msg)
 		}
 		return m.handleKey(msg)
 
@@ -142,17 +165,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		if key := m.selectedKey(); key != "" {
-			m.sup.RestartService(key, "manual restart")
+			_ = m.sup.RestartService(key, "manual restart")
 		}
 
 	case "s":
 		if key := m.selectedKey(); key != "" {
-			go m.sup.StopService(key)
+			go func() { _ = m.sup.StopService(key) }()
 		}
 
 	case "S":
 		if key := m.selectedKey(); key != "" {
-			m.sup.StartService(key)
+			_ = m.sup.StartService(key)
 		}
 
 	case "w":
@@ -193,6 +216,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case "t":
+		if m.store != nil {
+			m.viewMode = viewModeTraces
+			m.traceSelected = 0
+			m.tracePane = 0
+			m.refreshTraceSpans()
+		}
+
 	case "?":
 		m.showHelp = true
 	}
@@ -200,7 +231,31 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) refreshTraceSpans() {
+	if m.store == nil {
+		return
+	}
+	m.traceSpans = m.store.Spans()
+}
+
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.traceFilterMode {
+		switch msg.String() {
+		case "enter", "esc":
+			m.traceFilterMode = false
+			m.refreshTraceSpans()
+		case "backspace":
+			if len(m.traceFilter) > 0 {
+				m.traceFilter = m.traceFilter[:len(m.traceFilter)-1]
+			}
+		default:
+			if len(msg.String()) == 1 {
+				m.traceFilter += msg.String()
+			}
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "enter", "esc":
 		m.searchMode = false
@@ -230,6 +285,10 @@ func (m Model) View() string {
 
 	if m.showHelp {
 		return m.viewHelp()
+	}
+
+	if m.viewMode == viewModeTraces {
+		return m.viewTraces()
 	}
 
 	// Layout: left pane (service list) | right pane (detail + logs)
@@ -542,9 +601,14 @@ func (m Model) viewStatusBar() string {
 		{"w", "watch"},
 		{"f", "follow"},
 		{"/", "search"},
-		{"?", "help"},
-		{"q", "quit"},
 	}
+	if m.store != nil {
+		keys = append(keys, struct{ key, desc string }{"t", "traces"})
+	}
+	keys = append(keys,
+		struct{ key, desc string }{"?", "help"},
+		struct{ key, desc string }{"q", "quit"},
+	)
 
 	var parts []string
 	for _, k := range keys {
@@ -579,9 +643,9 @@ func (m Model) viewHelp() string {
 	}
 
 	for _, b2 := range bindings {
-		b.WriteString(fmt.Sprintf("  %s  %s\n",
+		fmt.Fprintf(&b, "  %s  %s\n",
 			styleHelpKey.Render(fmt.Sprintf("%-8s", b2.key)),
-			b2.desc))
+			b2.desc)
 	}
 
 	b.WriteString("\n")

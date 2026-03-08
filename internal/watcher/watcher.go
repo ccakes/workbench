@@ -35,7 +35,6 @@ type serviceWatcher struct {
 	key       string
 	svcCfg    config.ServiceConfig
 	fsWatcher *fsnotify.Watcher
-	watchDirs []string
 	debounce  time.Duration
 	mu        sync.Mutex
 	timer     *time.Timer
@@ -71,7 +70,7 @@ func (m *Manager) Start() error {
 func (m *Manager) Stop() {
 	m.cancel()
 	for _, sw := range m.watchers {
-		sw.fsWatcher.Close()
+		_ = sw.fsWatcher.Close()
 	}
 }
 
@@ -101,7 +100,7 @@ func (m *Manager) addServiceWatcher(key string, svcCfg config.ServiceConfig) err
 			root = filepath.Join(svcCfg.Dir, root)
 		}
 		if err := addDirsRecursive(fsw, root, svcCfg.Watch.Ignore); err != nil {
-			fsw.Close()
+			_ = fsw.Close()
 			return err
 		}
 	}
@@ -127,7 +126,7 @@ func (m *Manager) watchLoop(sw *serviceWatcher) {
 			// Handle new directories
 			if evt.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(evt.Name); err == nil && info.IsDir() {
-					addDirsRecursive(sw.fsWatcher, evt.Name, sw.svcCfg.Watch.Ignore)
+					_ = addDirsRecursive(sw.fsWatcher, evt.Name, sw.svcCfg.Watch.Ignore)
 				}
 			}
 
@@ -184,7 +183,7 @@ func (sw *serviceWatcher) scheduleRestart(m *Manager, file string) {
 		sw.mu.Lock()
 		reason := fmt.Sprintf("file changed: %s", sw.lastFile)
 		sw.mu.Unlock()
-		m.restarter.RestartService(sw.key, reason)
+		_ = m.restarter.RestartService(sw.key, reason)
 	})
 }
 

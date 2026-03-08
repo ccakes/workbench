@@ -1,4 +1,4 @@
-# bench
+# workbench
 
 > `bench` is a terminal UI for running, watching, and supervising local development services, with live process state and integrated logs.
 
@@ -144,8 +144,8 @@ When a `.go` or `.yaml` file changes under `./api`, only the `api` service resta
 
 ## Comparison with Procfile tools
 
-| Feature | bench | Overmind | foreman |
-|---------|-------|----------|---------|
+| Feature | workbench | Overmind | foreman |
+|---------|-----------|----------|---------|
 | Config format | YAML | Procfile | Procfile |
 | File watching | Built-in | No | No |
 | TUI | Built-in | tmux-based | No |

@@ -42,5 +42,5 @@
 | Key | Action |
 |-----|--------|
 | `?` | Toggle help screen |
-| `q` | Quit bench |
-| `Ctrl+C` | Quit bench |
+| `q` | Quit workbench |
+| `Ctrl+C` | Quit workbench |

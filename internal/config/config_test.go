@@ -1274,7 +1274,7 @@ func TestFindConfig_NoConfigExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
@@ -1297,7 +1297,7 @@ func TestFindConfig_FindsInCurrentDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
@@ -1322,7 +1322,7 @@ func TestFindConfig_FindsYamlExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
@@ -1351,7 +1351,7 @@ func TestFindConfig_FindsInParentDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	if err := os.Chdir(child); err != nil {
 		t.Fatal(err)
@@ -1380,7 +1380,7 @@ func TestFindConfig_PrefersYmlOverYaml(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(orig)
+	defer func() { _ = os.Chdir(orig) }()
 
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
@@ -1470,4 +1470,215 @@ func resolveSymlinks(t *testing.T, path string) string {
 		t.Fatalf("EvalSymlinks(%q): %v", path, err)
 	}
 	return resolved
+}
+
+// ---------------------------------------------------------------------------
+// Tracing config
+// ---------------------------------------------------------------------------
+
+func TestParse_TracingConfig(t *testing.T) {
+	yaml := []byte(`
+version: 1
+global:
+  tracing:
+    enabled: true
+    port: 9999
+    buffer_size: "1GB"
+services:
+  app:
+    dir: /tmp
+    command: "echo hi"
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Global.Tracing.Enabled {
+		t.Error("tracing.enabled = false, want true")
+	}
+	if cfg.Global.Tracing.Port != 9999 {
+		t.Errorf("tracing.port = %d, want 9999", cfg.Global.Tracing.Port)
+	}
+	wantSize := ByteSize(1024 * 1024 * 1024) // 1GB
+	if cfg.Global.Tracing.BufferSize != wantSize {
+		t.Errorf("tracing.buffer_size = %d, want %d", cfg.Global.Tracing.BufferSize, wantSize)
+	}
+}
+
+func TestParse_TracingDefaults(t *testing.T) {
+	yaml := []byte(`
+version: 1
+services:
+  app:
+    dir: /tmp
+    command: "echo hi"
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Global.Tracing.Enabled {
+		t.Error("tracing.enabled should default to false")
+	}
+	if cfg.Global.Tracing.Port != 4318 {
+		t.Errorf("tracing.port = %d, want 4318 (default)", cfg.Global.Tracing.Port)
+	}
+	wantSize := ByteSize(500 * 1024 * 1024) // 500MB
+	if cfg.Global.Tracing.BufferSize != wantSize {
+		t.Errorf("tracing.buffer_size = %d, want %d (500MB default)", cfg.Global.Tracing.BufferSize, wantSize)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ByteSize parsing
+// ---------------------------------------------------------------------------
+
+func TestByteSize_Parsing(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"500MB", 500 * 1024 * 1024},
+		{"1GB", 1024 * 1024 * 1024},
+		{"1.5GB", int64(1.5 * 1024 * 1024 * 1024)},
+		{"1024KB", 1024 * 1024},
+		{"100B", 100},
+		{"2TB", 2 * 1024 * 1024 * 1024 * 1024},
+		{"512mb", 512 * 1024 * 1024},
+		{"10M", 10 * 1024 * 1024},
+		{"1K", 1024},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseByteSize(tt.input)
+			if err != nil {
+				t.Fatalf("parseByteSize(%q) error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("parseByteSize(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestByteSize_Invalid(t *testing.T) {
+	invalid := []string{
+		"",
+		"XYZ",
+		"500QQ",
+	}
+	for _, input := range invalid {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseByteSize(input)
+			if err == nil {
+				t.Errorf("parseByteSize(%q) expected error, got nil", input)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tracing validation
+// ---------------------------------------------------------------------------
+
+func TestValidate_TracingInvalidPort(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Version: 1,
+		Global: GlobalConfig{
+			Tracing: TracingConfig{
+				Enabled:    true,
+				Port:       0,
+				BufferSize: ByteSize(500 * 1024 * 1024),
+			},
+		},
+		Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     dir,
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid tracing port")
+	}
+	assertContains(t, err.Error(), "tracing port must be between")
+}
+
+func TestValidate_TracingPortTooHigh(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Version: 1,
+		Global: GlobalConfig{
+			Tracing: TracingConfig{
+				Enabled:    true,
+				Port:       70000,
+				BufferSize: ByteSize(500 * 1024 * 1024),
+			},
+		},
+		Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     dir,
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for port > 65535")
+	}
+	assertContains(t, err.Error(), "tracing port must be between")
+}
+
+func TestValidate_TracingInvalidBufferSize(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Version: 1,
+		Global: GlobalConfig{
+			Tracing: TracingConfig{
+				Enabled:    true,
+				Port:       4318,
+				BufferSize: ByteSize(0),
+			},
+		},
+		Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     dir,
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for zero buffer_size")
+	}
+	assertContains(t, err.Error(), "tracing buffer_size must be greater than 0")
+}
+
+func TestValidate_TracingDisabledSkipsValidation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Version: 1,
+		Global: GlobalConfig{
+			Tracing: TracingConfig{
+				Enabled:    false,
+				Port:       0,
+				BufferSize: ByteSize(0),
+			},
+		},
+		Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     dir,
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error when tracing is disabled, got: %v", err)
+	}
 }

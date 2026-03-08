@@ -18,7 +18,6 @@ type Supervisor struct {
 	cfg      *config.Config
 	services map[string]*managedService
 	bus      *events.Bus
-	mu       sync.RWMutex
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
@@ -472,6 +471,35 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 			return nil, fmt.Errorf("env_file %q: %w", ms.cfg.EnvFile, err)
 		}
 		env = append(env, fileEnv...)
+	}
+
+	// OTEL env var injection when tracing is enabled
+	if s.cfg.Global.Tracing.Enabled {
+		port := s.cfg.Global.Tracing.Port
+		hasEndpoint := false
+		hasProtocol := false
+		// Check service-level env, env file, and global env for existing OTEL vars
+		for _, e := range env {
+			if len(e) > 30 && e[:30] == "OTEL_EXPORTER_OTLP_ENDPOINT=" {
+				hasEndpoint = true
+			} else if len(e) > 29 && e[:29] == "OTEL_EXPORTER_OTLP_PROTOCOL=" {
+				hasProtocol = true
+			}
+		}
+		for k := range ms.cfg.Env {
+			switch k {
+			case "OTEL_EXPORTER_OTLP_ENDPOINT":
+				hasEndpoint = true
+			case "OTEL_EXPORTER_OTLP_PROTOCOL":
+				hasProtocol = true
+			}
+		}
+		if !hasEndpoint {
+			env = append(env, fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:%d", port))
+		}
+		if !hasProtocol {
+			env = append(env, "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf")
+		}
 	}
 
 	// Inline env (highest priority)

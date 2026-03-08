@@ -56,7 +56,7 @@ func TestDebugRender(t *testing.T) {
 
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
-	m := NewModel(sup)
+	m := NewModel(sup, nil)
 	m.width = 130
 	m.height = 35
 

@@ -1,6 +1,6 @@
 # Configuration Reference
 
-bench uses a YAML configuration file, by default `bench.yml` in the current or parent directory.
+workbench uses a YAML configuration file, by default `bench.yml` in the current or parent directory.
 
 ## Config discovery
 

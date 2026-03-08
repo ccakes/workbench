@@ -116,6 +116,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Global.Tracing.Enabled {
+		if c.Global.Tracing.Port <= 0 || c.Global.Tracing.Port >= 65536 {
+			errs = append(errs, fmt.Sprintf("tracing port must be between 1 and 65535, got %d", c.Global.Tracing.Port))
+		}
+		if c.Global.Tracing.BufferSize <= 0 {
+			errs = append(errs, "tracing buffer_size must be greater than 0")
+		}
+	}
+
 	if len(errs) > 0 {
 		return &ValidationError{Errors: errs}
 	}

@@ -9,9 +9,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/ccakes/bench/internal/collector"
 	"github.com/ccakes/bench/internal/config"
 	"github.com/ccakes/bench/internal/events"
 	"github.com/ccakes/bench/internal/runner"
+	"github.com/ccakes/bench/internal/spanbuf"
 	"github.com/ccakes/bench/internal/supervisor"
 	"github.com/ccakes/bench/internal/tui"
 	"github.com/ccakes/bench/internal/watcher"
@@ -53,7 +55,7 @@ func Run() int {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `bench - YAML-native TUI for running and supervising local development services
+	fmt.Fprintf(os.Stderr, `workbench - YAML-native TUI for running and supervising local development services
 
 Usage:
   bench [command] [flags]
@@ -94,7 +96,7 @@ func runUp(args []string) int {
 	noTUI := fs.Bool("no-tui", false, "disable TUI, run in foreground")
 	noWatch := fs.Bool("no-watch", false, "disable file watching")
 	verbose := fs.Bool("verbose", false, "verbose output")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -135,17 +137,36 @@ func runUp(args []string) int {
 		}
 	}
 
-	if *noTUI {
-		return runHeadless(sup, bus, *verbose)
+	// Start tracing collector if enabled
+	var col *collector.Collector
+	var store *spanbuf.Store
+	if cfg.Global.Tracing.Enabled {
+		store = spanbuf.NewStore(int64(cfg.Global.Tracing.BufferSize))
+		col = collector.New(store, bus, cfg.Global.Tracing.Port)
+		if err := col.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: tracing collector failed to start: %v\n", err)
+			col = nil
+		}
 	}
 
-	m := tui.NewModel(sup)
+	if *noTUI {
+		code := runHeadless(sup, bus, *verbose)
+		if col != nil {
+			_ = col.Shutdown()
+		}
+		return code
+	}
+
+	m := tui.NewModel(sup, store)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 	}
 
+	if col != nil {
+		_ = col.Shutdown()
+	}
 	if watchMgr != nil {
 		watchMgr.Stop()
 	}
@@ -205,7 +226,7 @@ func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, verbose bool) int 
 func runStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -239,7 +260,7 @@ func runStart(args []string) int {
 func runStop(args []string) int {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -269,7 +290,7 @@ func runStop(args []string) int {
 func runRestart(args []string) int {
 	fs := flag.NewFlagSet("restart", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -300,7 +321,7 @@ func runStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
 	jsonOut := fs.Bool("json", false, "JSON output")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -377,16 +398,16 @@ func statusJSON(cfg *config.Config) int {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(services)
+	_ = enc.Encode(services)
 	return 0
 }
 
 func runLogs(args []string) int {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	follow := fs.Bool("follow", false, "follow log output")
+	fs.Bool("follow", false, "follow log output")
 	fs.Bool("f", false, "follow log output (shorthand)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -433,11 +454,7 @@ func runLogs(args []string) int {
 					data.Stream,
 					data.Line)
 			}
-			if !*follow {
-				// In non-follow mode, drain available events then exit
-				// For now, follow mode is the default behavior for logs
-			}
-		case <-sigCh:
+			case <-sigCh:
 			sup.Shutdown()
 			return 0
 		}
@@ -447,7 +464,7 @@ func runLogs(args []string) int {
 func runValidate(args []string) int {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {

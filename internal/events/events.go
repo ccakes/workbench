@@ -12,6 +12,7 @@ const (
 	LogLine
 	FileChanged
 	RestartScheduled
+	SpanBatchReceived
 )
 
 type Stream int
@@ -48,6 +49,10 @@ type LogLineData struct {
 
 type FileChangeData struct {
 	Path string
+}
+
+type SpanBatchData struct {
+	Count int
 }
 
 // Bus is a simple pub/sub event bus. Subscribers receive events on buffered
