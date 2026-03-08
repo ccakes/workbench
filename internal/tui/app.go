@@ -638,6 +638,7 @@ func (m Model) viewHelp() string {
 		{"g", "Scroll to top of logs"},
 		{"G", "Scroll to bottom of logs (follow)"},
 		{"/", "Search/filter logs"},
+		{"t", "Open trace browser (requires tracing enabled)"},
 		{"?", "Toggle this help"},
 		{"q", "Quit"},
 	}
