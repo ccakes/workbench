@@ -194,7 +194,9 @@ Press `t` in the TUI to open the trace browser, which has three views:
 
 ## Claude Code Integration
 
-A [Claude Code skill](claude/SKILL.md) is included for managing your dev environment through Claude. It lets Claude check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
+A [Claude Code skill](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) is included for managing your dev environment through Claude (or a similar tool). It lets Claude check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
+
+Install the skill using `bench install-skill`.
 
 ## Platform Support
 

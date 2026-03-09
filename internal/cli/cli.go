@@ -44,6 +44,8 @@ func Run() int {
 		return runLogs(os.Args[2:])
 	case "validate":
 		return runValidate(os.Args[2:])
+	case "install-skill":
+		return runInstallSkill(os.Args[2:])
 	case "version":
 		fmt.Printf("bench %s\n", Version)
 		return 0
@@ -64,14 +66,15 @@ Usage:
   bench [command] [flags]
 
 Commands:
-  up          Start services and open TUI (default)
-  start       Start specific services
-  stop        Stop specific services
-  restart     Restart specific services
-  status      Show service status
-  logs        Show service logs
-  validate    Validate configuration
-  version     Show version
+  up                 Start services and open TUI (default)
+  start              Start specific services
+  stop               Stop specific services
+  restart            Restart specific services
+  status             Show service status
+  logs               Show service logs
+  validate           Validate configuration
+  install-skill      Install Claude skill to ~/.claude/skills/
+  version            Show version
 
 Global Flags:
   --config <path>    Path to config file (default: bench.yml)
