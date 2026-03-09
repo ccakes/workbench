@@ -192,6 +192,10 @@ Press `t` in the TUI to open the trace browser, which has three views:
 | Dependency ordering | Yes | No | No |
 | Working directory per service | Yes | No | No |
 
+## Claude Code Integration
+
+A [Claude Code skill](claude/SKILL.md) is included for managing your dev environment through Claude. It lets Claude check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
+
 ## Platform Support
 
 - macOS
