@@ -5,15 +5,15 @@
 workbench is structured as a layered system where the TUI is a view over runtime state, not the owner of it.
 
 ```
-┌──────────────────────────────────┐
-│            TUI / CLI             │  View/Controller
-├──────────────────────────────────┤
-│           Event Bus              │  Internal pub/sub
-├──────────┬───────────┬───────────┤
-│Supervisor│  Watcher  │Log Buffer │  Runtime Engine
-├──────────┴───────────┴───────────┤
-│         Config Loader            │  Configuration
-└──────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│            TUI / CLI / Control API       │  View/Controller
+├──────────────────────────────────────────┤
+│              Event Bus                   │  Internal pub/sub
+├──────────┬───────────┬──────┬────────────┤
+│Supervisor│  Watcher  │ Logs │ Span Store │  Runtime Engine
+├──────────┴───────────┴──────┴────────────┤
+│            Config Loader                 │  Configuration
+└──────────────────────────────────────────┘
 ```
 
 ## Components
@@ -68,9 +68,15 @@ Layout:
 - Right upper: selected service detail (PID, command, restarts, etc.)
 - Right lower: log view with follow/search/filter
 
+### Control API (`internal/api/`)
+
+Unix domain socket server started by `bench up`. Exposes a JSON request-per-connection protocol for querying and controlling the running instance. CLI subcommands (`bench status`, `bench start`, `bench stop`, etc.) connect to this socket instead of creating standalone supervisors.
+
+Socket path is derived deterministically from the config file path (`SHA256(abs_path)[:8]` → `/tmp/bench-<hash>.sock`), so the client auto-discovers the running instance. See [Control API docs](control-api.md) for the full protocol.
+
 ### CLI (`internal/cli/`)
 
-Subcommand dispatch using stdlib `flag`. Each command creates its own FlagSet. The `up` command wires together config, supervisor, watcher, and TUI.
+Subcommand dispatch using stdlib `flag`. Each command creates its own FlagSet. The `up` command wires together config, supervisor, watcher, collector, API server, and TUI. Other subcommands connect to the running instance via the control socket.
 
 ## Design Principles
 

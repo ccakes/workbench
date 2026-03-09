@@ -5,10 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/ccakes/workbench/internal/api"
 	"github.com/ccakes/workbench/internal/collector"
 	"github.com/ccakes/workbench/internal/config"
 	"github.com/ccakes/workbench/internal/events"
@@ -72,27 +75,67 @@ Commands:
 
 Global Flags:
   --config <path>    Path to config file (default: bench.yml)
+  --socket <path>    Control socket path (default: auto from config)
   --verbose          Verbose output
 
 Run 'bench <command> --help' for more information on a command.
 `)
 }
 
-func loadConfig(configPath string) (*config.Config, error) {
+// resolveConfigPath returns the absolute path to the config file.
+func resolveConfigPath(configPath string) (string, error) {
 	path := configPath
 	if path == "" {
 		var err error
 		path, err = config.FindConfig()
 		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Abs(path)
+}
+
+func loadConfig(configPath string) (*config.Config, error) {
+	path, err := resolveConfigPath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	return config.Load(path)
+}
+
+// connectToRunning attempts to connect to a running bench instance.
+// If socketOverride or BENCH_SOCKET is set, config resolution is skipped.
+func connectToRunning(configPath, socketOverride string) (*api.Client, error) {
+	var sockPath string
+
+	// Direct socket override doesn't need config
+	if socketOverride != "" {
+		sockPath = socketOverride
+	} else if envSock := os.Getenv("BENCH_SOCKET"); envSock != "" {
+		sockPath = envSock
+	} else {
+		// Need config to derive socket path
+		resolved, err := resolveConfigPath(configPath)
+		if err != nil {
+			return nil, err
+		}
+		sockPath, err = api.SocketPath(resolved)
+		if err != nil {
 			return nil, err
 		}
 	}
-	return config.Load(path)
+
+	client := api.NewClient(sockPath)
+	if err := client.Ping(); err != nil {
+		return nil, fmt.Errorf("no running bench instance found: %w", err)
+	}
+	return client, nil
 }
 
 func runUp(args []string) int {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
+	socketPath := fs.String("socket", "", "control socket path (default: auto)")
 	noTUI := fs.Bool("no-tui", false, "disable TUI, run in foreground")
 	noWatch := fs.Bool("no-watch", false, "disable file watching")
 	verbose := fs.Bool("verbose", false, "verbose output")
@@ -120,11 +163,36 @@ func runUp(args []string) int {
 		}
 	}
 
+	// Claim the control socket before starting services.
+	// This ensures only one bench instance owns a given config.
+	var apiSrv *api.Server
+	var store *spanbuf.Store
+	resolved, resolveErr := resolveConfigPath(*configPath)
+	if resolveErr == nil {
+		sockPath, sockErr := api.SocketPathFromEnvOrConfig(*socketPath, resolved)
+		if sockErr == nil {
+			// Create server with nil supervisor/store for now — they're set after creation
+			apiSrv = api.New(nil, nil, sockPath, Version)
+			if err := apiSrv.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+		}
+	}
+
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
 
+	// Wire the supervisor into the already-listening API server
+	if apiSrv != nil {
+		apiSrv.SetSupervisor(sup)
+	}
+
 	if err := sup.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "error starting services: %v\n", err)
+		if apiSrv != nil {
+			apiSrv.Shutdown()
+		}
 		return 1
 	}
 
@@ -139,7 +207,6 @@ func runUp(args []string) int {
 
 	// Start tracing collector if enabled
 	var col *collector.Collector
-	var store *spanbuf.Store
 	if cfg.Global.Tracing.Enabled {
 		store = spanbuf.NewStore(int64(cfg.Global.Tracing.BufferSize))
 		col = collector.New(store, bus, cfg.Global.Tracing.Port)
@@ -147,10 +214,16 @@ func runUp(args []string) int {
 			fmt.Fprintf(os.Stderr, "warning: tracing collector failed to start: %v\n", err)
 			col = nil
 		}
+		if apiSrv != nil {
+			apiSrv.SetStore(store)
+		}
 	}
 
 	if *noTUI {
 		code := runHeadless(sup, bus, *verbose)
+		if apiSrv != nil {
+			apiSrv.Shutdown()
+		}
 		if col != nil {
 			_ = col.Shutdown()
 		}
@@ -164,6 +237,9 @@ func runUp(args []string) int {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 	}
 
+	if apiSrv != nil {
+		apiSrv.Shutdown()
+	}
 	if col != nil {
 		_ = col.Shutdown()
 	}
@@ -226,17 +302,8 @@ func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, verbose bool) int 
 func runStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
-
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "config validation failed:\n%v\n", err)
-		return 1
-	}
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -244,11 +311,14 @@ func runStart(args []string) int {
 		return 1
 	}
 
-	bus := events.NewBus()
-	sup := supervisor.New(cfg, bus)
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 
 	for _, svc := range services {
-		if err := sup.StartService(svc); err != nil {
+		if _, err := client.Call("start", map[string]string{"service": svc}); err != nil {
 			fmt.Fprintf(os.Stderr, "error starting %s: %v\n", svc, err)
 			return 1
 		}
@@ -260,13 +330,8 @@ func runStart(args []string) int {
 func runStop(args []string) int {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
-
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -274,11 +339,14 @@ func runStop(args []string) int {
 		return 1
 	}
 
-	bus := events.NewBus()
-	sup := supervisor.New(cfg, bus)
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 
 	for _, svc := range services {
-		if err := sup.StopService(svc); err != nil {
+		if _, err := client.Call("stop", map[string]string{"service": svc}); err != nil {
 			fmt.Fprintf(os.Stderr, "error stopping %s: %v\n", svc, err)
 			return 1
 		}
@@ -290,13 +358,8 @@ func runStop(args []string) int {
 func runRestart(args []string) int {
 	fs := flag.NewFlagSet("restart", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
-
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -304,11 +367,15 @@ func runRestart(args []string) int {
 		return 1
 	}
 
-	bus := events.NewBus()
-	sup := supervisor.New(cfg, bus)
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
 
 	for _, svc := range services {
-		if err := sup.RestartService(svc, "manual restart"); err != nil {
+		params := map[string]string{"service": svc, "reason": "manual restart"}
+		if _, err := client.Call("restart", params); err != nil {
 			fmt.Fprintf(os.Stderr, "error restarting %s: %v\n", svc, err)
 			return 1
 		}
@@ -320,9 +387,17 @@ func runRestart(args []string) int {
 func runStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	_ = fs.Parse(args)
 
+	// Try connecting to a running instance for live status
+	client, connErr := connectToRunning(*configPath, *socketOverride)
+	if connErr == nil {
+		return statusFromRunning(client, *jsonOut, fs.Args())
+	}
+
+	// Fall back to config-only output
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -367,6 +442,71 @@ func runStatus(args []string) int {
 	return 0
 }
 
+// statusFromRunning queries live status from a running bench instance.
+func statusFromRunning(client *api.Client, jsonOut bool, serviceFilter []string) int {
+	var params map[string]string
+	if len(serviceFilter) > 0 {
+		params = map[string]string{"service": serviceFilter[0]}
+	}
+
+	data, err := client.Call("status", params)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	if jsonOut {
+		var raw json.RawMessage
+		if err := json.Unmarshal(data, &raw); err == nil {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(raw)
+		}
+		return 0
+	}
+
+	// Parse into a list (single service response wraps into a list)
+	var services []api.ServiceStatus
+	if err := json.Unmarshal(data, &services); err != nil {
+		// Try single object
+		var single api.ServiceStatus
+		if err := json.Unmarshal(data, &single); err == nil {
+			services = []api.ServiceStatus{single}
+		} else {
+			fmt.Fprintf(os.Stderr, "error: failed to parse status response\n")
+			return 1
+		}
+	}
+
+	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %s\n", "SERVICE", "TYPE", "STATUS", "PID", "RESTARTS", "UPTIME")
+	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %s\n",
+		strings.Repeat("-", 20),
+		strings.Repeat("-", 10),
+		strings.Repeat("-", 12),
+		strings.Repeat("-", 8),
+		strings.Repeat("-", 10),
+		strings.Repeat("-", 12))
+
+	for _, svc := range services {
+		pid := "-"
+		if svc.PID > 0 {
+			pid = fmt.Sprintf("%d", svc.PID)
+		}
+		uptime := "-"
+		if svc.Uptime != "" {
+			uptime = svc.Uptime
+		}
+		fmt.Printf("%-20s %-10s %-12s %-8s %-10d %s\n",
+			svc.Key,
+			svc.Type,
+			svc.Status,
+			pid,
+			svc.RestartCount,
+			uptime)
+	}
+	return 0
+}
+
 func statusJSON(cfg *config.Config) int {
 	type svcStatus struct {
 		Key       string `json:"key"`
@@ -405,58 +545,76 @@ func statusJSON(cfg *config.Config) int {
 func runLogs(args []string) int {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
-	fs.Bool("follow", false, "follow log output")
-	fs.Bool("f", false, "follow log output (shorthand)")
+	socketOverride := fs.String("socket", "", "control socket path")
+	last := fs.Int("last", 100, "number of log lines to fetch")
+	follow := fs.Bool("follow", false, "follow log output (poll)")
+	followShort := fs.Bool("f", false, "follow log output (shorthand)")
 	_ = fs.Parse(args)
 
-	cfg, err := loadConfig(*configPath)
+	services := fs.Args()
+	if len(services) == 0 {
+		fmt.Fprintf(os.Stderr, "usage: bench logs <service>\n")
+		return 1
+	}
+	svcName := services[0]
+
+	client, err := connectToRunning(*configPath, *socketOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "config validation failed:\n%v\n", err)
+
+	// cursor tracks the seq of the last line printed to avoid duplicates
+	var cursor uint64
+
+	fetchAndPrint := func(params map[string]any) error {
+		data, err := client.Call("logs", params)
+		if err != nil {
+			return err
+		}
+		var lines []api.LogLine
+		if err := json.Unmarshal(data, &lines); err != nil {
+			return err
+		}
+		for _, l := range lines {
+			ts := l.Timestamp
+			if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
+				ts = t.Format("15:04:05")
+			}
+			fmt.Printf("[%s] %s|%s: %s\n", ts, svcName, l.Stream, l.Text)
+			if l.Seq > cursor {
+				cursor = l.Seq
+			}
+		}
+		return nil
+	}
+
+	// Initial fetch
+	if err := fetchAndPrint(map[string]any{"service": svcName, "last": *last}); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 
-	services := fs.Args()
-
-	bus := events.NewBus()
-	sup := supervisor.New(cfg, bus)
-
-	if err := sup.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "error starting services: %v\n", err)
-		return 1
+	if !*follow && !*followShort {
+		return 0
 	}
 
-	ch := bus.Subscribe(256)
+	// Poll for new logs using sequence cursor to avoid duplicates
 	sigCh := make(chan os.Signal, 1)
 	signalNotify(sigCh)
-
-	filterService := ""
-	if len(services) > 0 {
-		filterService = services[0]
-	}
-
 	for {
 		select {
-		case evt := <-ch:
-			if evt.Type != events.LogLine {
-				continue
-			}
-			if filterService != "" && evt.Service != filterService {
-				continue
-			}
-			if data, ok := evt.Data.(events.LogLineData); ok {
-				fmt.Printf("[%s] %s|%s: %s\n",
-					evt.Timestamp.Format("15:04:05"),
-					evt.Service,
-					data.Stream,
-					data.Line)
-			}
-			case <-sigCh:
-			sup.Shutdown()
+		case <-sigCh:
 			return 0
+		case <-time.After(time.Second):
+			params := map[string]any{"service": svcName, "last": 500}
+			if cursor > 0 {
+				params["after_seq"] = cursor
+			}
+			if err := fetchAndPrint(params); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
 		}
 	}
 }
