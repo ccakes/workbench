@@ -110,6 +110,15 @@ func (c *Config) Validate() error {
 		errs = append(errs, err.Error())
 	}
 
+	if c.Global.ContainerPrefix != "" {
+		for _, ch := range c.Global.ContainerPrefix {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+				errs = append(errs, fmt.Sprintf("container_prefix %q contains invalid character %q (only alphanumeric, hyphens, and underscores are allowed)", c.Global.ContainerPrefix, string(ch)))
+				break
+			}
+		}
+	}
+
 	if c.Global.EnvFile != "" {
 		if _, err := os.Stat(c.Global.EnvFile); err != nil {
 			errs = append(errs, fmt.Sprintf("global env_file %q: %v", c.Global.EnvFile, err))

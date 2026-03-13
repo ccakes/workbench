@@ -26,6 +26,7 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 | `log_buffer_lines` | integer | `5000` | Max log lines kept per service |
 | `watch_debounce` | duration | `300ms` | Default debounce for file watchers |
 | `env_file` | path | | Global .env file loaded for all services |
+| `container_prefix` | string | dirname | Prefix for Docker container names (e.g. `{prefix}-{service}`) |
 | `tracing` | object | | Tracing configuration |
 
 #### Tracing
@@ -88,7 +89,7 @@ command:
 | `network` | string | | Docker network to connect to |
 | `command` | string or string[] | | Override container entrypoint/command |
 
-Container services are managed via Docker. workbench handles the full lifecycle: pulling, starting, log streaming, and cleanup. Environment variables from `env` and `env_file` are passed to the container via `-e` flags.
+Container services are managed via Docker. workbench handles the full lifecycle: pulling, starting, log streaming, and cleanup. Environment variables from `env` and `env_file` are passed to the container via `-e` flags. Containers are named `{container_prefix}-{service_key}` — see the `container_prefix` global setting.
 
 ```yaml
 services:
@@ -182,6 +183,7 @@ global:
   log_buffer_lines: 5000
   watch_debounce: 300ms
   env_file: .env
+  container_prefix: myproject
   tracing:
     enabled: true
     port: 4318

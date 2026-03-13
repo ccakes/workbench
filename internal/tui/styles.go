@@ -26,6 +26,7 @@ var (
 
 	styleSelected = lipgloss.NewStyle().
 			Bold(true).
+			Background(lipgloss.Color("236")).
 			Foreground(colorCyan)
 
 	styleStatusRunning = lipgloss.NewStyle().Foreground(colorGreen)

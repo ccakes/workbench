@@ -21,6 +21,7 @@ type GlobalConfig struct {
 	LogBufferLines  int           `yaml:"log_buffer_lines"`
 	WatchDebounce   Duration      `yaml:"watch_debounce"`
 	EnvFile         string        `yaml:"env_file"`
+	ContainerPrefix string        `yaml:"container_prefix"`
 	Tracing         TracingConfig `yaml:"tracing"`
 }
 
@@ -307,6 +308,9 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	cfg.applyDefaults()
+	if cfg.Global.ContainerPrefix == "" {
+		cfg.Global.ContainerPrefix = filepath.Base(baseDir)
+	}
 	for key, svc := range cfg.Services {
 		if svc.Dir != "" && !filepath.IsAbs(svc.Dir) {
 			svc.Dir = filepath.Join(baseDir, svc.Dir)

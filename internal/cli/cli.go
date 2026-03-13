@@ -44,6 +44,8 @@ func Run() int {
 		return runLogs(os.Args[2:])
 	case "validate":
 		return runValidate(os.Args[2:])
+	case "import-compose":
+		return runImportCompose(os.Args[2:])
 	case "install-skill":
 		return runInstallSkill(os.Args[2:])
 	case "version":
@@ -73,6 +75,7 @@ Commands:
   status             Show service status
   logs               Show service logs
   validate           Validate configuration
+  import-compose     Convert docker-compose.yml to bench.yml
   install-skill      Install Claude skill to ~/.claude/skills/
   version            Show version
 

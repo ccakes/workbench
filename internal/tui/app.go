@@ -394,6 +394,11 @@ func (m Model) viewServiceList(width, height int) string {
 		}
 
 		if i == m.selected {
+			// Pad to full pane width so background highlight spans the row
+			lineVisual := ansi.StringWidth(line)
+			if lineVisual < width {
+				line += strings.Repeat(" ", width-lineVisual)
+			}
 			line = styleSelected.Render(line)
 		}
 

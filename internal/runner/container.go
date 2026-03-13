@@ -20,10 +20,10 @@ type ContainerRunner struct {
 	logCmd      *exec.Cmd
 }
 
-func NewContainerRunner(cfg config.ServiceConfig, serviceKey string) *ContainerRunner {
+func NewContainerRunner(cfg config.ServiceConfig, serviceKey string, prefix string) *ContainerRunner {
 	return &ContainerRunner{
 		cfg:  cfg,
-		name: "bench-" + serviceKey,
+		name: prefix + "-" + serviceKey,
 	}
 }
 

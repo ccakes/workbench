@@ -294,7 +294,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		// Create a fresh runner for each attempt
 		if ms.cfg.IsContainer() {
-			ms.r = runner.NewContainerRunner(ms.cfg, ms.key)
+			ms.r = runner.NewContainerRunner(ms.cfg, ms.key, s.cfg.Global.ContainerPrefix)
 		} else {
 			ms.r = runner.NewProcessRunner(ms.cfg)
 		}
