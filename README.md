@@ -192,11 +192,11 @@ Press `t` in the TUI to open the trace browser, which has three views:
 | Dependency ordering | Yes | No | No |
 | Working directory per service | Yes | No | No |
 
-## Claude Code Integration
+## Agent Skill
 
-A [Claude Code skill](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) is included for managing your dev environment through Claude (or a similar tool). It lets Claude check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
+An embedded [agent skill](docs/agent-skill.md) is included for managing your dev environment through AI coding tools. It lets agents check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
 
-Install the skill using `bench install-skill`.
+Run `bench agent-skill` to view the skill and save it to any detected agent tool (Claude Code, Codex, Gemini Code Assist, OpenCode).
 
 ## Platform Support
 

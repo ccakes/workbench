@@ -46,8 +46,8 @@ func Run() int {
 		return runValidate(os.Args[2:])
 	case "import-compose":
 		return runImportCompose(os.Args[2:])
-	case "install-skill":
-		return runInstallSkill(os.Args[2:])
+	case "agent-skill":
+		return runAgentSkill(os.Args[2:])
 	case "version":
 		fmt.Printf("bench %s\n", Version)
 		return 0
@@ -76,7 +76,7 @@ Commands:
   logs               Show service logs
   validate           Validate configuration
   import-compose     Convert docker-compose.yml to bench.yml
-  install-skill      Install Claude skill to ~/.claude/skills/
+  agent-skill        Print embedded agent skill with save options
   version            Show version
 
 Global Flags:
