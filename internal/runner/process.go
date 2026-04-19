@@ -75,13 +75,31 @@ func (r *ProcessRunner) Stop(exitCh <-chan int, timeout time.Duration) {
 		return
 	}
 	pid := r.cmd.Process.Pid
+
+	// Snapshot the full descendant tree before signaling. Once parents die,
+	// children reparent to init/launchd and the tree structure is lost.
+	// This catches processes that escaped the process group (e.g. Gradle
+	// daemons, daemonized Java servers).
+	desc := descendants(pid)
+
+	// SIGTERM the process group (handles processes that stayed in the group).
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	// Also SIGTERM each descendant individually — catches those that left
+	// the process group via setsid/setpgid (common with Gradle, Maven, etc).
+	signalAll(desc, syscall.SIGTERM)
 
 	select {
 	case <-exitCh:
+		// Direct child exited. Give escaped descendants a moment to finish
+		// their graceful shutdown, then force-kill any survivors.
+		if anyAlive(desc) {
+			time.Sleep(500 * time.Millisecond)
+			signalAll(desc, syscall.SIGKILL)
+		}
 		return
 	case <-time.After(timeout):
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		signalAll(desc, syscall.SIGKILL)
 		<-exitCh
 	}
 }

@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/compose-spec/compose-go/v2 v2.10.1
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/mitchellh/go-ps v1.0.0
 	go.opentelemetry.io/proto/otlp v1.9.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
