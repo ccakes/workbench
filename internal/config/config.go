@@ -17,12 +17,13 @@ type Config struct {
 }
 
 type GlobalConfig struct {
-	ShutdownTimeout Duration      `yaml:"shutdown_timeout"`
-	LogBufferLines  int           `yaml:"log_buffer_lines"`
-	WatchDebounce   Duration      `yaml:"watch_debounce"`
-	EnvFile         string        `yaml:"env_file"`
-	ContainerPrefix string        `yaml:"container_prefix"`
-	Tracing         TracingConfig `yaml:"tracing"`
+	ShutdownTimeout Duration          `yaml:"shutdown_timeout"`
+	LogBufferLines  int               `yaml:"log_buffer_lines"`
+	WatchDebounce   Duration          `yaml:"watch_debounce"`
+	Env             map[string]string `yaml:"env"`
+	EnvFile         string            `yaml:"env_file"`
+	ContainerPrefix string            `yaml:"container_prefix"`
+	Tracing         TracingConfig     `yaml:"tracing"`
 }
 
 // Duration wraps time.Duration for YAML unmarshaling from strings like "10s".

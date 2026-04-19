@@ -464,6 +464,11 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 		env = append(env, fileEnv...)
 	}
 
+	// Global inline env (overrides env_file, overridden by per-service env)
+	for k, v := range s.cfg.Global.Env {
+		env = append(env, k+"="+v)
+	}
+
 	// Load service env file
 	if ms.cfg.EnvFile != "" {
 		fileEnv, err := config.LoadEnvFile(ms.cfg.EnvFile)
@@ -483,6 +488,14 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 			if len(e) > 30 && e[:30] == "OTEL_EXPORTER_OTLP_ENDPOINT=" {
 				hasEndpoint = true
 			} else if len(e) > 29 && e[:29] == "OTEL_EXPORTER_OTLP_PROTOCOL=" {
+				hasProtocol = true
+			}
+		}
+		for k := range s.cfg.Global.Env {
+			switch k {
+			case "OTEL_EXPORTER_OTLP_ENDPOINT":
+				hasEndpoint = true
+			case "OTEL_EXPORTER_OTLP_PROTOCOL":
 				hasProtocol = true
 			}
 		}

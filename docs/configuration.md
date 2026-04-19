@@ -25,6 +25,7 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 | `shutdown_timeout` | duration | `10s` | Time to wait for graceful stop before SIGKILL |
 | `log_buffer_lines` | integer | `5000` | Max log lines kept per service |
 | `watch_debounce` | duration | `300ms` | Default debounce for file watchers |
+| `env` | map | | Global environment variables applied to all services |
 | `env_file` | path | | Global .env file loaded for all services |
 | `container_prefix` | string | dirname | Prefix for Docker container names (e.g. `{prefix}-{service}`) |
 | `tracing` | object | | Tracing configuration |
@@ -156,8 +157,9 @@ Environment variables are loaded in this order (later overrides earlier):
 
 1. System environment
 2. Global `env_file`
-3. Service `env_file`
-4. Service `env` (inline)
+3. Global `env` (inline)
+4. Service `env_file`
+5. Service `env` (inline)
 
 ### .env file format
 
@@ -182,6 +184,8 @@ global:
   shutdown_timeout: 10s
   log_buffer_lines: 5000
   watch_debounce: 300ms
+  env:
+    LOG_LEVEL: info
   env_file: .env
   container_prefix: myproject
   tracing:
