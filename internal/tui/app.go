@@ -381,17 +381,18 @@ func (m Model) viewServiceList(width, height int) string {
 		}
 
 		// Calculate name column width to fill the line.
-		// indicator (2) + spaces (3) + name + status + uptime must fit in width.
-		suffixLen := len(status) + len(uptime)
-		nameWidth := max(1, width-suffixLen-5) // 5 = " " + indicator + " " + " " before status + margin
+		// indicator (2) + spaces (3) + name + uptime + status must fit in width.
+		suffixLen := len(uptime) + 1 + len(status)
+		nameWidth := max(1, width-suffixLen-5) // 5 = " " + indicator + " " + " " before uptime/status + margin
 		truncatedName := truncate(displayName, nameWidth)
 		// Pad name with spaces (plain text, so len() == visual width)
 		padded := truncatedName + strings.Repeat(" ", max(0, nameWidth-len(truncatedName)))
 
-		line := " " + indicator + " " + padded + " " + styledStatus
+		line := " " + indicator + " " + padded
 		if uptime != "" {
 			line += styleLabel.Render(uptime)
 		}
+		line += " " + styledStatus
 
 		if i == m.selected {
 			// Pad to full pane width so background highlight spans the row
