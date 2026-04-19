@@ -3,8 +3,11 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var invalidContainerPrefixChar = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 type ValidationError struct {
 	Errors []string
@@ -110,13 +113,8 @@ func (c *Config) Validate() error {
 		errs = append(errs, err.Error())
 	}
 
-	if c.Global.ContainerPrefix != "" {
-		for _, ch := range c.Global.ContainerPrefix {
-			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
-				errs = append(errs, fmt.Sprintf("container_prefix %q contains invalid character %q (only alphanumeric, hyphens, and underscores are allowed)", c.Global.ContainerPrefix, string(ch)))
-				break
-			}
-		}
+	if bad := invalidContainerPrefixChar.FindString(c.Global.ContainerPrefix); bad != "" {
+		errs = append(errs, fmt.Sprintf("container_prefix %q contains invalid character %q (only alphanumeric, hyphens, and underscores are allowed)", c.Global.ContainerPrefix, bad))
 	}
 
 	if c.Global.EnvFile != "" {
