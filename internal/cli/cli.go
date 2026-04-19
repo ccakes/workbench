@@ -555,7 +555,7 @@ func runLogs(args []string) int {
 	last := fs.Int("last", 100, "number of log lines to fetch")
 	follow := fs.Bool("follow", false, "follow log output (poll)")
 	followShort := fs.Bool("f", false, "follow log output (shorthand)")
-	_ = fs.Parse(args)
+	_ = fs.Parse(reorderFlags(args))
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -623,6 +623,27 @@ func runLogs(args []string) int {
 			}
 		}
 	}
+}
+
+// reorderFlags moves flag-like args (starting with "-") and their values
+// before positional args so that Go's flag package parses them correctly.
+// This allows "bench logs megalith -last 200" to work like "bench logs -last 200 megalith".
+func reorderFlags(args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			// If the flag uses "-flag value" form (not "-flag=value"),
+			// consume the next arg as the value.
+			if !strings.Contains(args[i], "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				flags = append(flags, args[i])
+			}
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	return append(flags, positional...)
 }
 
 func runValidate(args []string) int {
