@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/ccakes/workbench/internal/runner"
 	"github.com/ccakes/workbench/internal/service"
 )
+
+// dependencyPollInterval is how often the run loop re-checks dependency
+// status while waiting for deps to reach Running.
+const dependencyPollInterval = 100 * time.Millisecond
 
 type Supervisor struct {
 	cfg      *config.Config
@@ -290,6 +295,10 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		default:
 		}
 
+		if !s.waitForDependencies(ms) {
+			return
+		}
+
 		s.setStatus(ms, service.StatusStarting, "")
 
 		// Create a fresh runner for each attempt
@@ -343,8 +352,36 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		// Wait for exit, stop, restart, or context cancel
 		timeout := ms.cfg.GetShutdownTimeout(s.cfg.Global.ShutdownTimeout)
 
+		// Start a readiness probe for this running instance. The probe runs
+		// under a child context that is cancelled whenever the runLoop exits
+		// the Running state (process exit, stop, restart, shutdown), so it
+		// can never outlive its process. Services without a configured probe
+		// transition to Ready immediately — runProbe returns true for an
+		// empty/none kind — so Ready is the uniform "up and good to go" state.
+		probeCtx, cancelProbe := context.WithCancel(s.ctx)
+		var probeWG sync.WaitGroup
+		var baseline uint64
+		if last := ms.logs.Last(1); len(last) == 1 {
+			baseline = last[0].Seq
+		}
+		probeWG.Go(func() {
+			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline) {
+				return
+			}
+			var reason string
+			if kind := ms.cfg.Readiness.Kind; kind != "" && kind != "none" {
+				reason = "readiness check passed"
+			}
+			s.setStatus(ms, service.StatusReady, reason)
+		})
+		stopProbe := func() {
+			cancelProbe()
+			probeWG.Wait()
+		}
+
 		select {
 		case exitCode := <-exitCh:
+			stopProbe()
 			ms.info.Lock()
 			ms.info.ExitCode = exitCode
 			ms.info.PID = 0
@@ -378,6 +415,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			}
 
 		case <-ms.stopCh:
+			stopProbe()
 			s.setStatus(ms, service.StatusStopping, "stopping")
 			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
@@ -389,6 +427,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			return
 
 		case reason := <-ms.restartCh:
+			stopProbe()
 			s.setStatus(ms, service.StatusRestarting, reason)
 			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
@@ -401,6 +440,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			retries = 0
 
 		case <-s.ctx.Done():
+			stopProbe()
 			s.setStatus(ms, service.StatusStopping, "shutting down")
 			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
@@ -412,6 +452,78 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			return
 		}
 	}
+}
+
+// depSatisfied reports whether a dep's current status satisfies this
+// dependent's start condition, and whether the dep has terminated (Failed or
+// Stopped) so the caller should cascade-fail.
+//
+// All running services ultimately reach StatusReady — services without a
+// probe are promoted instantly by the runLoop — so Ready is the single
+// "healthy" signal. Disabled is treated as satisfied so that a dep with
+// auto_start:false does not deadlock its dependents.
+func depSatisfied(status service.Status) (satisfied, terminal bool) {
+	switch status {
+	case service.StatusReady, service.StatusDisabled:
+		return true, false
+	case service.StatusFailed, service.StatusStopped:
+		return false, true
+	}
+	return false, false
+}
+
+// waitForDependencies blocks until every service in ms.cfg.DependsOn is
+// satisfied (see depSatisfied). If a dependency terminates before becoming
+// satisfied, the current service is marked Failed and the function returns
+// false so the run loop exits without starting.
+//
+// Returns false if the caller should abandon startup (ctx cancelled, stop
+// requested, or a dependency failed).
+func (s *Supervisor) waitForDependencies(ms *managedService) bool {
+	if len(ms.cfg.DependsOn) == 0 {
+		return true
+	}
+
+	pendingAnnounced := false
+	for _, depKey := range ms.cfg.DependsOn {
+		depMs, ok := s.services[depKey]
+		if !ok {
+			// Unknown deps are rejected by config.Validate; treat as satisfied.
+			continue
+		}
+
+		for {
+			depMs.info.RLock()
+			depStatus := depMs.info.Status
+			depMs.info.RUnlock()
+
+			satisfied, terminal := depSatisfied(depStatus)
+			if satisfied {
+				break
+			}
+			if terminal {
+				s.setStatus(ms, service.StatusFailed,
+					fmt.Sprintf("dependency %q is %s", depKey, depStatus.String()))
+				return false
+			}
+
+			if !pendingAnnounced {
+				s.setStatus(ms, service.StatusPending,
+					fmt.Sprintf("waiting for: %s", strings.Join(ms.cfg.DependsOn, ", ")))
+				pendingAnnounced = true
+			}
+
+			select {
+			case <-s.ctx.Done():
+				return false
+			case <-ms.stopCh:
+				s.setStatus(ms, service.StatusStopped, "stopped while waiting for dependencies")
+				return false
+			case <-time.After(dependencyPollInterval):
+			}
+		}
+	}
+	return true
 }
 
 func (s *Supervisor) shouldRestart(ms *managedService, exitCode int) bool {

@@ -151,7 +151,7 @@ func TestStartStop(t *testing.T) {
 		info := sup.ServiceInfo("web")
 		info.RLock()
 		defer info.RUnlock()
-		return info.Status == service.StatusRunning
+		return info.Status.IsRunning()
 	})
 
 	// Stop via API
@@ -179,7 +179,7 @@ func TestStartStop(t *testing.T) {
 		info := sup.ServiceInfo("web")
 		info.RLock()
 		defer info.RUnlock()
-		return info.Status == service.StatusRunning
+		return info.Status.IsRunning()
 	})
 }
 
@@ -390,7 +390,7 @@ func TestRestart(t *testing.T) {
 		info := sup.ServiceInfo("web")
 		info.RLock()
 		defer info.RUnlock()
-		return info.Status == service.StatusRunning
+		return info.Status.IsRunning()
 	})
 
 	_, err := client.Call("restart", map[string]string{"service": "web", "reason": "test restart"})
@@ -403,7 +403,7 @@ func TestRestart(t *testing.T) {
 		info := sup.ServiceInfo("web")
 		info.RLock()
 		defer info.RUnlock()
-		return info.Status == service.StatusRunning && info.RestartCount >= 1
+		return info.Status.IsRunning() && info.RestartCount >= 1
 	})
 }
 

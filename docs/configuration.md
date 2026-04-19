@@ -53,7 +53,7 @@ Byte sizes use human-readable format: `100MB`, `1GB`, etc.
 | `env` | map | | Inline environment variables |
 | `env_file` | path | | Path to .env file |
 | `auto_start` | bool | `true` | Start automatically with `bench up` |
-| `depends_on` | string[] | | Services that must start first |
+| `depends_on` | string[] | | Services that must reach Running before this one starts (see [Dependency ordering](#dependency-ordering)) |
 | `restart` | object | | Restart policy configuration |
 | `watch` | object | | File watch configuration |
 | `readiness` | object | | Readiness detection |
@@ -145,11 +145,52 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 | Field | Type | Description |
 |-------|------|-------------|
 | `kind` | string | `none`, `log_pattern`, `tcp`, or `http` |
-| `pattern` | string | Log line pattern (for `log_pattern`) |
-| `address` | string | TCP address to probe (for `tcp`) |
-| `url` | string | HTTP URL to probe (for `http`) |
-| `timeout` | duration | Probe timeout |
-| `initial_delay` | duration | Delay before first probe |
+| `pattern` | string | Go regular expression matched against log lines (for `log_pattern`) |
+| `address` | string | TCP address to dial, `host:port` (for `tcp`) |
+| `url` | string | HTTP URL to GET; any 2xx response means ready (for `http`) |
+| `timeout` | duration | Per-attempt probe timeout (default `2s`) |
+| `initial_delay` | duration | Delay before the first probe attempt |
+
+Every service transitions `Starting → Running → Ready`. Services without a
+probe are promoted to **Ready** immediately once the process is up — so
+**Ready** is the uniform "good to go" steady state. Services with a probe
+configured stay in **Running** until the probe succeeds, then transition to
+**Ready**. Probes retry indefinitely on failure; they never mark the service
+as Failed. If a probe never succeeds, investigate the configuration — the
+service will sit in Running with dependents parked in Pending.
+
+- **`log_pattern`** scans each new stdout/stderr line against the regex,
+  starting from lines emitted after the probe begins (so a stale match from a
+  previous run cannot false-trigger on restart).
+- **`tcp`** dials `address` with a `timeout` deadline per attempt. First
+  successful connect wins.
+- **`http`** issues `GET url` using an `http.Client` with `timeout`. Any 2xx
+  response marks the service Ready.
+
+## Dependency ordering
+
+`depends_on` controls service startup order. A service with
+`depends_on: [X, Y]` will not launch its process until both `X` and `Y` have
+reached **Ready**. Since unprobed services reach Ready the instant their
+process starts, this degrades to "wait for process up" for simple cases while
+still giving probe-configured deps their full readiness semantics.
+
+While a service is blocked on dependencies it shows **pending** with a
+`waiting for: …` reason. Once every dependency is Ready, the service
+proceeds to Starting.
+
+Edge cases:
+
+- **Dependency fails or stops before becoming Running** — the dependent is
+  marked Failed and does not start. The failure reason references the dep.
+- **Dependency has `auto_start: false`** — treated as opt-out; the dependent
+  does *not* wait (otherwise it would deadlock). Manually starting the
+  dependent via `bench start` will still wait for any still-Pending deps to
+  become Running.
+- **Dependency dies after the dependent is already Running** — the dependent
+  keeps running. Restarts of the dependent do re-check dependencies.
+
+Cycles are detected at config load time and produce a validation error.
 
 ## Environment variable loading
 

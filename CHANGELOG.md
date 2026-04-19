@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-19
+
+### Added
+- Runtime readiness probes. Services with `readiness.kind` of `log_pattern`,
+  `tcp`, or `http` now transition to **ready** once the probe succeeds.
+  Services without a probe are promoted to **ready** as soon as the process is
+  up, so **ready** is the uniform "good to go" state across all services.
+
+### Fixed
+- `depends_on` now actually blocks dependent services from starting until
+  their dependencies reach **ready**. Previously it only influenced
+  topological sort order, so every service transitioned to running almost
+  simultaneously. If a dependency fails, dependents now cascade to failed
+  instead of running without their prerequisites.
+
 ## [0.4.0] - 2026-04-19
 
 ### Added
