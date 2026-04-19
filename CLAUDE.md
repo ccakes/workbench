@@ -44,4 +44,4 @@ internal/
 
 ## Documentation
 
-When adding new features, make sure to write a simple markdown document for them under `docs/`. Also when making changes, always check whether any existing documentation needs to be updated. Update the CHANGELOG.md file when changes are being made - keep it high level. Only features, big fixes or user-facing breaking changes, not every commit.
+When adding new features, make sure to write a simple markdown document for them under `docs/`. Also when making changes, always check whether any existing documentation needs to be updated. Update the CHANGELOG.md file when changes are being made - keep it high level and add an "Unreleased" section at the top to collect updated. Only features, big fixes or user-facing breaking changes, not every commit. NEVER COMMIT THE CHANGELOG! Let the user handle that.
