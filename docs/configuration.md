@@ -15,6 +15,7 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `version` | integer | yes | Config version, must be `1` |
+| `extends` | path | no | Path to a parent config file to inherit from. See [Composition](#composition-with-extends) |
 | `global` | object | no | Global settings |
 | `services` | map | yes | Service definitions (key = service ID) |
 
@@ -166,6 +167,50 @@ service will sit in Running with dependents parked in Pending.
   successful connect wins.
 - **`http`** issues `GET url` using an `http.Client` with `timeout`. Any 2xx
   response marks the service Ready.
+
+## Composition with `extends`
+
+A config file can declare a single parent file via `extends:`. Every service and global setting from the parent is inherited; the child adds its own services and overrides on top.
+
+```yaml
+# bench/core.yml — shared infrastructure
+version: 1
+services:
+  postgres:
+    container:
+      image: postgres:16
+      ports: ["5432:5432"]
+  elasticsearch:
+    container:
+      image: elasticsearch:8
+      ports: ["9200:9200"]
+```
+
+```yaml
+# forge.yml — depends on core
+version: 1
+extends: bench/core.yml
+services:
+  forge-api:
+    dir: ./api
+    command: "go run ./cmd/api"
+  forge-web:
+    dir: ./web
+    command: "npm run dev"
+```
+
+`bench --config forge.yml` runs all four services together.
+
+### Rules
+
+- **Single parent.** `extends:` is a single path, not a list. Chains are allowed (`a.yml` extends `b.yml` extends `c.yml`); cycles are rejected at load time.
+- **Path resolution is per-file.** `extends:` and any relative paths in a config (`dir`, `env_file`, container volumes) are resolved against the directory of *that* file. A parent in `bench/core.yml` with `dir: ./svc` resolves to `bench/svc`, regardless of where the child config lives.
+- **Service name conflicts are an error.** If both child and parent define a service with the same name, loading fails. To customise a parent service, change the parent or rename one of them.
+- **Global `env`: per-key merge.** Parent env vars are inherited; the child can add keys or override individual ones.
+- **Global scalars (`log_buffer_lines`, `shutdown_timeout`, `container_prefix`, …): child wins when set.** If the child omits a field, the parent's value is used; otherwise the default applies.
+- **`tracing.enabled` is enable-only.** A child can turn tracing on but cannot turn off tracing the parent enabled. `tracing.port` and `tracing.buffer_size` follow normal child-wins rules.
+- **`container_prefix` defaults to the entry-point file's directory name** (the file passed to `--config`), not the parent's.
+- **Defaults are applied once, on the merged result.** Defaults never mask values inherited from a parent.
 
 ## Dependency ordering
 

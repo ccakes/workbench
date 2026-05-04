@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 type Config struct {
 	Version  int                      `yaml:"version"`
+	Extends  string                   `yaml:"extends"`
 	Global   GlobalConfig             `yaml:"global"`
 	Services map[string]ServiceConfig `yaml:"services"`
 }
@@ -83,11 +85,11 @@ func (c Command) String() string {
 }
 
 type ContainerConfig struct {
-	Image   string  `yaml:"image"`
+	Image   string   `yaml:"image"`
 	Ports   []string `yaml:"ports"`
 	Volumes []string `yaml:"volumes"`
-	Network string  `yaml:"network"`
-	Command Command `yaml:"command"`
+	Network string   `yaml:"network"`
+	Command Command  `yaml:"command"`
 }
 
 type ServiceConfig struct {
@@ -293,25 +295,54 @@ func formatByteSize(b int64) string {
 	}
 }
 
-// Load reads and parses a config file.
+// Load reads and parses a config file. If the file declares `extends:`, the
+// referenced parent is loaded recursively and merged underneath the child.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config %s: %w", path, err)
+		return nil, fmt.Errorf("resolving config path %s: %w", path, err)
 	}
-	return Parse(data, filepath.Dir(path))
+	cfg, err := loadWithStack(abs, nil)
+	if err != nil {
+		return nil, err
+	}
+	cfg.applyDefaults()
+	if cfg.Global.ContainerPrefix == "" {
+		cfg.Global.ContainerPrefix = filepath.Base(filepath.Dir(abs))
+	}
+	return cfg, nil
 }
 
-// Parse parses YAML config data. Relative paths are resolved against baseDir.
+// Parse parses YAML config data for a single file. Relative paths are resolved
+// against baseDir. `extends:` is rejected here — use Load for files that may
+// reference a parent.
 func Parse(data []byte, baseDir string) (*Config, error) {
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
+	cfg, err := parseRaw(data, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Extends != "" {
+		return nil, fmt.Errorf("Parse does not support 'extends:'; use Load")
 	}
 	cfg.applyDefaults()
 	if cfg.Global.ContainerPrefix == "" {
 		cfg.Global.ContainerPrefix = filepath.Base(baseDir)
 	}
+	return cfg, nil
+}
+
+// parseRaw unmarshals YAML and resolves relative paths against baseDir. It
+// does not apply defaults or resolve `extends:`.
+func parseRaw(data []byte, baseDir string) (*Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	resolveRelativePaths(&cfg, baseDir)
+	return &cfg, nil
+}
+
+func resolveRelativePaths(cfg *Config, baseDir string) {
 	for key, svc := range cfg.Services {
 		if svc.Dir != "" && !filepath.IsAbs(svc.Dir) {
 			svc.Dir = filepath.Join(baseDir, svc.Dir)
@@ -334,7 +365,116 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 	if cfg.Global.EnvFile != "" && !filepath.IsAbs(cfg.Global.EnvFile) {
 		cfg.Global.EnvFile = filepath.Join(baseDir, cfg.Global.EnvFile)
 	}
-	return &cfg, nil
+}
+
+func loadWithStack(absPath string, stack []string) (*Config, error) {
+	for _, s := range stack {
+		if s == absPath {
+			chain := append(append([]string{}, stack...), absPath)
+			return nil, fmt.Errorf("extends: cycle detected: %s", strings.Join(chain, " -> "))
+		}
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading config %s: %w", absPath, err)
+	}
+	cfg, err := parseRaw(data, filepath.Dir(absPath))
+	if err != nil {
+		return nil, fmt.Errorf("parsing config %s: %w", absPath, err)
+	}
+	if cfg.Extends == "" {
+		return cfg, nil
+	}
+	parentPath := cfg.Extends
+	if !filepath.IsAbs(parentPath) {
+		parentPath = filepath.Join(filepath.Dir(absPath), parentPath)
+	}
+	parentAbs, err := filepath.Abs(parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving parent path %s (extended by %s): %w", parentPath, absPath, err)
+	}
+	parent, err := loadWithStack(parentAbs, append(stack, absPath))
+	if err != nil {
+		return nil, err
+	}
+	return merge(parent, cfg)
+}
+
+// merge combines a parent config with a child config. Child fields override
+// parent fields where set; service maps are unioned and conflicts are an error.
+func merge(parent, child *Config) (*Config, error) {
+	out := *parent
+	if child.Version != 0 {
+		out.Version = child.Version
+	}
+	out.Global = mergeGlobal(parent.Global, child.Global)
+
+	services := make(map[string]ServiceConfig, len(parent.Services)+len(child.Services))
+	for k, v := range parent.Services {
+		services[k] = v
+	}
+	var conflicts []string
+	for k, v := range child.Services {
+		if _, dup := services[k]; dup {
+			conflicts = append(conflicts, k)
+			continue
+		}
+		services[k] = v
+	}
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return nil, fmt.Errorf("service name conflicts between child and parent config: %s", strings.Join(conflicts, ", "))
+	}
+	out.Services = services
+	out.Extends = ""
+	return &out, nil
+}
+
+func mergeGlobal(p, c GlobalConfig) GlobalConfig {
+	out := p
+	if c.ShutdownTimeout.Duration != 0 {
+		out.ShutdownTimeout = c.ShutdownTimeout
+	}
+	if c.LogBufferLines != 0 {
+		out.LogBufferLines = c.LogBufferLines
+	}
+	if c.WatchDebounce.Duration != 0 {
+		out.WatchDebounce = c.WatchDebounce
+	}
+	if c.EnvFile != "" {
+		out.EnvFile = c.EnvFile
+	}
+	if c.ContainerPrefix != "" {
+		out.ContainerPrefix = c.ContainerPrefix
+	}
+	out.Tracing = mergeTracing(p.Tracing, c.Tracing)
+	if len(c.Env) > 0 {
+		merged := make(map[string]string, len(p.Env)+len(c.Env))
+		for k, v := range p.Env {
+			merged[k] = v
+		}
+		for k, v := range c.Env {
+			merged[k] = v
+		}
+		out.Env = merged
+	}
+	return out
+}
+
+// mergeTracing applies a child tracing config over the parent. Tracing.Enabled
+// is enable-only: a child cannot disable tracing that a parent enabled.
+func mergeTracing(p, c TracingConfig) TracingConfig {
+	out := p
+	if c.Enabled {
+		out.Enabled = true
+	}
+	if c.Port != 0 {
+		out.Port = c.Port
+	}
+	if c.BufferSize != 0 {
+		out.BufferSize = c.BufferSize
+	}
+	return out
 }
 
 func (c *Config) applyDefaults() {

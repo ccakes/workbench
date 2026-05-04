@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1681,4 +1682,509 @@ func TestValidate_TracingDisabledSkipsValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected no error when tracing is disabled, got: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// extends:
+// ---------------------------------------------------------------------------
+
+// writeYAML writes a config file inside dir and returns its absolute path.
+func writeYAML(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func TestLoad_Extends_BasicInheritance(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(tmp, "api"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+services:
+  postgres:
+    container:
+      image: postgres:16
+      ports: ["5432:5432"]
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+services:
+  api:
+    dir: api
+    command: "echo hi"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Services["postgres"]; !ok {
+		t.Errorf("expected inherited service 'postgres'")
+	}
+	if _, ok := cfg.Services["api"]; !ok {
+		t.Errorf("expected own service 'api'")
+	}
+	if cfg.Extends != "" {
+		t.Errorf("Extends should be cleared on merged config, got %q", cfg.Extends)
+	}
+}
+
+func TestLoad_Extends_RelativePathResolution(t *testing.T) {
+	tmp := t.TempDir()
+	parentDir := filepath.Join(tmp, "bench")
+	if err := os.Mkdir(parentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	parentSvcDir := filepath.Join(parentDir, "svc")
+	if err := os.Mkdir(parentSvcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, parentDir, "core.yml", `
+version: 1
+services:
+  worker:
+    dir: ./svc
+    command: "echo hi"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: bench/core.yml
+services:
+  api:
+    dir: .
+    command: "echo hi"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wantWorker := resolveSymlinks(t, parentSvcDir)
+	gotWorker := resolveSymlinks(t, cfg.Services["worker"].Dir)
+	if gotWorker != wantWorker {
+		t.Errorf("worker dir = %q, want %q (resolved from parent's dir)", gotWorker, wantWorker)
+	}
+	wantAPI := resolveSymlinks(t, tmp)
+	gotAPI := resolveSymlinks(t, cfg.Services["api"].Dir)
+	if gotAPI != wantAPI {
+		t.Errorf("api dir = %q, want %q (resolved from child's dir)", gotAPI, wantAPI)
+	}
+}
+
+func TestLoad_Extends_RelativeEnvFilesAndVolumesPerFile(t *testing.T) {
+	tmp := t.TempDir()
+	parentDir := filepath.Join(tmp, "parent")
+	childDir := filepath.Join(tmp, "child")
+	if err := os.Mkdir(parentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(childDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeYAML(t, parentDir, "core.yml", `
+version: 1
+global:
+  env_file: parent.env
+services:
+  postgres:
+    container:
+      image: postgres:16
+      volumes:
+        - ./parent-data:/var/lib/postgresql/data
+    env_file: parent.svc.env
+`)
+	child := writeYAML(t, childDir, "forge.yml", `
+version: 1
+extends: ../parent/core.yml
+services:
+  redis:
+    container:
+      image: redis:7
+      volumes:
+        - ./child-data:/data
+    env_file: child.svc.env
+`)
+
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if want := filepath.Join(parentDir, "parent.env"); cfg.Global.EnvFile != want {
+		t.Errorf("global env_file = %q, want %q", cfg.Global.EnvFile, want)
+	}
+	parentSvc := cfg.Services["postgres"]
+	if want := filepath.Join(parentDir, "parent.svc.env"); parentSvc.EnvFile != want {
+		t.Errorf("parent service env_file = %q, want %q", parentSvc.EnvFile, want)
+	}
+	if want := filepath.Join(parentDir, "parent-data") + ":/var/lib/postgresql/data"; parentSvc.Container.Volumes[0] != want {
+		t.Errorf("parent volume = %q, want %q", parentSvc.Container.Volumes[0], want)
+	}
+	childSvc := cfg.Services["redis"]
+	if want := filepath.Join(childDir, "child.svc.env"); childSvc.EnvFile != want {
+		t.Errorf("child service env_file = %q, want %q", childSvc.EnvFile, want)
+	}
+	if want := filepath.Join(childDir, "child-data") + ":/data"; childSvc.Container.Volumes[0] != want {
+		t.Errorf("child volume = %q, want %q", childSvc.Container.Volumes[0], want)
+	}
+}
+
+func TestLoad_Extends_AbsolutePath(t *testing.T) {
+	tmp := t.TempDir()
+	parentDir := t.TempDir()
+	parentPath := writeYAML(t, parentDir, "core.yml", `
+version: 1
+services:
+  postgres:
+    container:
+      image: postgres:16
+      ports: ["5432:5432"]
+`)
+	child := writeYAML(t, tmp, "forge.yml", fmt.Sprintf(`
+version: 1
+extends: %s
+services:
+  api:
+    dir: /tmp
+    command: "echo"
+`, parentPath))
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := cfg.Services["postgres"]; !ok {
+		t.Error("expected service 'postgres' inherited via absolute extends path")
+	}
+}
+
+func TestLoad_Extends_ChainedThreeLevels(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "a.yml", `
+version: 1
+services:
+  a:
+    dir: /tmp
+    command: "echo a"
+`)
+	writeYAML(t, tmp, "b.yml", `
+version: 1
+extends: a.yml
+services:
+  b:
+    dir: /tmp
+    command: "echo b"
+`)
+	cPath := writeYAML(t, tmp, "c.yml", `
+version: 1
+extends: b.yml
+services:
+  c:
+    dir: /tmp
+    command: "echo c"
+`)
+	cfg, err := Load(cPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if _, ok := cfg.Services[name]; !ok {
+			t.Errorf("expected service %q in merged config", name)
+		}
+	}
+}
+
+func TestLoad_Extends_Cycle(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "a.yml", `
+version: 1
+extends: b.yml
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	writeYAML(t, tmp, "b.yml", `
+version: 1
+extends: a.yml
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	_, err := Load(filepath.Join(tmp, "a.yml"))
+	if err == nil {
+		t.Fatal("expected cycle error")
+	}
+	assertContains(t, err.Error(), "cycle")
+}
+
+func TestLoad_Extends_SelfCycle(t *testing.T) {
+	tmp := t.TempDir()
+	path := writeYAML(t, tmp, "self.yml", `
+version: 1
+extends: self.yml
+services:
+  s:
+    dir: /tmp
+    command: "echo"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected cycle error")
+	}
+	assertContains(t, err.Error(), "cycle")
+}
+
+func TestLoad_Extends_MissingParent(t *testing.T) {
+	tmp := t.TempDir()
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: nope.yml
+services:
+  api:
+    dir: /tmp
+    command: "echo"
+`)
+	_, err := Load(child)
+	if err == nil {
+		t.Fatal("expected error for missing parent")
+	}
+	assertContains(t, err.Error(), "nope.yml")
+}
+
+func TestLoad_Extends_ParseErrorIncludesFilePath(t *testing.T) {
+	tmp := t.TempDir()
+	parent := writeYAML(t, tmp, "bad-parent.yml", `
+version: 1
+global:
+  shutdown_timeout: not-a-duration
+services:
+  parent:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: bad-parent.yml
+services:
+  child:
+    dir: /tmp
+    command: "echo"
+`)
+
+	_, err := Load(child)
+	if err == nil {
+		t.Fatal("expected parse error from parent")
+	}
+	assertContains(t, err.Error(), "parsing config")
+	assertContains(t, err.Error(), parent)
+}
+
+func TestLoad_Extends_ServiceConflict(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+services:
+  postgres:
+    container:
+      image: postgres:16
+      ports: ["5432:5432"]
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+services:
+  postgres:
+    container:
+      image: postgres:17
+      ports: ["5432:5432"]
+`)
+	_, err := Load(child)
+	if err == nil {
+		t.Fatal("expected service-conflict error")
+	}
+	assertContains(t, err.Error(), "postgres")
+	assertContains(t, err.Error(), "conflict")
+}
+
+func TestLoad_Extends_GlobalEnvMerge(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+global:
+  env:
+    FOO: "1"
+    BAR: "2"
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+global:
+  env:
+    BAR: "20"
+    BAZ: "3"
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := map[string]string{"FOO": "1", "BAR": "20", "BAZ": "3"}
+	for k, v := range want {
+		if cfg.Global.Env[k] != v {
+			t.Errorf("global env[%q] = %q, want %q", k, cfg.Global.Env[k], v)
+		}
+	}
+	if len(cfg.Global.Env) != len(want) {
+		t.Errorf("global env size = %d, want %d (got %v)", len(cfg.Global.Env), len(want), cfg.Global.Env)
+	}
+}
+
+func TestLoad_Extends_GlobalScalarOverride(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+global:
+  log_buffer_lines: 1000
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+global:
+  log_buffer_lines: 9999
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Global.LogBufferLines != 9999 {
+		t.Errorf("log_buffer_lines = %d, want 9999 (child override)", cfg.Global.LogBufferLines)
+	}
+}
+
+func TestLoad_Extends_GlobalScalarInherit(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+global:
+  log_buffer_lines: 9999
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Global.LogBufferLines != 9999 {
+		t.Errorf("log_buffer_lines = %d, want 9999 (inherited)", cfg.Global.LogBufferLines)
+	}
+}
+
+func TestLoad_Extends_DefaultsAppliedOnce(t *testing.T) {
+	tmp := t.TempDir()
+	writeYAML(t, tmp, "core.yml", `
+version: 1
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, tmp, "forge.yml", `
+version: 1
+extends: core.yml
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Global.LogBufferLines != 5000 {
+		t.Errorf("log_buffer_lines = %d, want 5000 (default)", cfg.Global.LogBufferLines)
+	}
+	if cfg.Global.ShutdownTimeout.Duration != 10*time.Second {
+		t.Errorf("shutdown_timeout = %v, want 10s (default)", cfg.Global.ShutdownTimeout.Duration)
+	}
+}
+
+func TestLoad_Extends_ContainerPrefixFromEntrypoint(t *testing.T) {
+	tmp := t.TempDir()
+	parentDir := filepath.Join(tmp, "core_dir")
+	childDir := filepath.Join(tmp, "forge_dir")
+	if err := os.Mkdir(parentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(childDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, parentDir, "core.yml", `
+version: 1
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	child := writeYAML(t, childDir, "forge.yml", `
+version: 1
+extends: ../core_dir/core.yml
+services:
+  b:
+    dir: /tmp
+    command: "echo"
+`)
+	cfg, err := Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Global.ContainerPrefix != "forge_dir" {
+		t.Errorf("container_prefix = %q, want %q (entry-point dir name)", cfg.Global.ContainerPrefix, "forge_dir")
+	}
+}
+
+func TestParse_RejectsExtends(t *testing.T) {
+	yaml := []byte(`
+version: 1
+extends: other.yml
+services:
+  a:
+    dir: /tmp
+    command: "echo"
+`)
+	_, err := Parse(yaml, "/tmp")
+	if err == nil {
+		t.Fatal("expected error from Parse when extends is set")
+	}
+	assertContains(t, err.Error(), "extends")
 }

@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Config composition via the top-level `extends:` directive. A config file can
+  declare `extends: path/to/parent.yml` to inherit every service and global
+  setting from a parent file. Chains are allowed; cycles are rejected. Service
+  name conflicts between child and parent fail loading. See
+  `docs/configuration.md#composition-with-extends`.
+
 ## [0.5.0] - 2026-04-19
 
 ### Added
