@@ -43,6 +43,7 @@ func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version str
 		"restart":      s.handleRestart,
 		"logs":         s.handleLogs,
 		"wait":         s.handleWait,
+		"reload":       s.handleReload,
 		"toggle-watch": s.handleToggleWatch,
 		"traces":       s.handleTraces,
 		"spans":        s.handleSpans,

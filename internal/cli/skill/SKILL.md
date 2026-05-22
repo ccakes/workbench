@@ -40,9 +40,14 @@ this skill, since `--help` is generated from the running binary.
 bench status -json              # parseable snapshot of every service
 bench status --why              # human table with REASON column always shown
 bench logs <service> -last 200  # recent logs for a service
+bench logs                      # multi-service tail (all services, [svc] prefix)
+bench logs --grep ERROR --since 5m   # filter by regex + time window
 bench start|stop|restart <service> [more services...]
+bench wait [<service>...] --timeout 5m  # block until ready (0=ok 1=fail 2=timeout)
+bench up [<service>...] [--profile <name>...]  # start subset or profile set
+bench reload                    # apply config changes in-place
+bench clean [--dry-run] [--force]  # remove stale socket + matching containers
 bench validate                  # check bench.yml without starting anything
-bench up [<service>...]         # start everything, or just the named subset
 ```
 
 All subcommands accept `--config <path>` and `--socket <path>` (or
@@ -77,8 +82,14 @@ common stuff, not an exhaustive reference.
 - Status flow: `pending → starting → running → [setup →] ready`. The optional
   `setup` step runs a per-service bootstrap command after the readiness probe
   passes; dependents wait for `ready`.
+- Readiness probe kinds: `tcp`, `http`, `log_pattern`, `exec`, `grpc`. Probe
+  stdout/stderr appears in the service log buffer tagged with stream `probe`.
 - Log buffers are ring buffers — old lines rotate out.
 - Unknown YAML fields are rejected; a typo like `expect_status` under
   `readiness:` fails validation rather than silently being ignored.
 - File watchers may auto-restart services on code changes (`watch_enabled`
   field in status); when set, manual `bench restart` is rarely needed.
+- `${VAR}` is expanded only inside `env:` and `env_file:` values — not in
+  commands or readiness fields.
+- `profiles: [name]` per service + `bench up --profile <name>` to filter
+  what gets started. Services without profiles are always-on.

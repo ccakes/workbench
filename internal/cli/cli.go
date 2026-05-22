@@ -52,6 +52,8 @@ func Run() int {
 		return runWait(os.Args[2:])
 	case "clean":
 		return runClean(os.Args[2:])
+	case "reload":
+		return runReload(os.Args[2:])
 	case "validate":
 		return runValidate(os.Args[2:])
 	case "import-compose":
@@ -86,6 +88,7 @@ Commands:
   logs               Show service logs
   wait               Block until services reach ready
   clean              Remove stale socket and prefix-matched containers
+  reload             Re-read config and restart services whose config changed
   validate           Validate configuration
   import-compose     Convert docker-compose.yml to bench.yml
   agent-skill        Print embedded agent skill with save options
@@ -860,6 +863,55 @@ func reorderFlags(args []string) []string {
 		}
 	}
 	return append(flags, positional...)
+}
+
+func runReload(args []string) int {
+	fs := flag.NewFlagSet("reload", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
+	_ = fs.Parse(reorderFlags(args))
+
+	resolved, err := resolveConfigPath(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	data, err := client.Call("reload", map[string]string{"config_path": resolved})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	var report supervisor.ReloadReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		fmt.Fprintf(os.Stderr, "error: parsing reload response: %v\n", err)
+		return 1
+	}
+
+	fmt.Println(report.Summary())
+	for _, key := range report.Restarted {
+		fmt.Printf("  restarted: %s\n", key)
+	}
+	for _, key := range report.Added {
+		fmt.Printf("  added (not auto-started — needs full `bench up`): %s\n", key)
+	}
+	for _, key := range report.Removed {
+		fmt.Printf("  removed (still running — needs full `bench down`): %s\n", key)
+	}
+	for key, errMsg := range report.Errors {
+		fmt.Fprintf(os.Stderr, "  error %s: %s\n", key, errMsg)
+	}
+	if len(report.Errors) > 0 {
+		return 1
+	}
+	return 0
 }
 
 func runClean(args []string) int {

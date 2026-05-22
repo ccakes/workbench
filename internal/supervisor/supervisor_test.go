@@ -1054,6 +1054,90 @@ func TestReadiness_RestartResetsBaseline(t *testing.T) {
 	}
 }
 
+// TestReload_RestartsChangedServices verifies that Reload diffs the new
+// config against the old, marks unchanged services as such, and restarts
+// services whose config has actually changed.
+func TestReload_RestartsChangedServices(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &config.Config{
+		Version: 1,
+		Global: config.GlobalConfig{
+			ShutdownTimeout: config.Duration{Duration: 1 * time.Second},
+			LogBufferLines:  500,
+		},
+		Services: map[string]config.ServiceConfig{
+			"keep":    longRunningSvc(dir),
+			"changed": longRunningSvc(dir),
+		},
+	}
+
+	bus := events.NewBus()
+	sup := New(cfg, bus)
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer shutdownWithTimeout(t, sup)
+
+	// Wait for both to be running.
+	for _, key := range []string{"keep", "changed"} {
+		info := sup.ServiceInfo(key)
+		if !pollUntil(t, 3*time.Second, 50*time.Millisecond, func() bool {
+			return getStatus(info) == service.StatusReady
+		}) {
+			t.Fatalf("expected %s to reach Ready", key)
+		}
+	}
+
+	startCount := getRestartCount(sup.ServiceInfo("changed"))
+
+	// Build new cfg: keep `keep` identical, change `changed`'s command, add a new svc.
+	newCfg := &config.Config{
+		Version: 1,
+		Global:  cfg.Global,
+		Services: map[string]config.ServiceConfig{
+			"keep":    longRunningSvc(dir),
+			"changed": longRunningSvc(dir),
+			"added":   longRunningSvc(dir),
+		},
+	}
+	// Mutate `changed` so the diff fires.
+	changed := newCfg.Services["changed"]
+	changed.Env = map[string]string{"NEW": "v"}
+	newCfg.Services["changed"] = changed
+
+	report := sup.Reload(newCfg)
+
+	if !contains(report.Restarted, "changed") {
+		t.Errorf("expected `changed` in restarted, got %+v", report)
+	}
+	if !contains(report.Unchanged, "keep") {
+		t.Errorf("expected `keep` in unchanged, got %+v", report)
+	}
+	if !contains(report.Added, "added") {
+		t.Errorf("expected `added` in added, got %+v", report)
+	}
+	if !report.NeedsRerun {
+		t.Errorf("expected NeedsRerun true when services were added/removed")
+	}
+
+	// Restart count for `changed` should bump.
+	if !pollUntil(t, 3*time.Second, 50*time.Millisecond, func() bool {
+		return getRestartCount(sup.ServiceInfo("changed")) > startCount
+	}) {
+		t.Errorf("expected restart count to bump for changed service")
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // TestSetupHook_RunsBetweenProbeAndReady verifies that when a setup hook is
 // configured, the service transitions Running -> Setup -> Ready and dependents
 // wait until the setup command exits 0.

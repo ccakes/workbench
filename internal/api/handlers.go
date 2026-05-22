@@ -6,10 +6,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ccakes/workbench/internal/config"
 	"github.com/ccakes/workbench/internal/events"
 	"github.com/ccakes/workbench/internal/logbuf"
 	"github.com/ccakes/workbench/internal/spanbuf"
 )
+
+// loadConfigForReload is a thin wrapper around config.Load so tests can stub
+// it out. Real implementation just delegates.
+var loadConfigForReload = func(path string) (*config.Config, error) {
+	return config.Load(path)
+}
 
 func (s *Server) handlePing(_ json.RawMessage) (any, error) {
 	return map[string]string{"version": s.version}, nil
@@ -237,6 +244,27 @@ func sortLogLinesByTimestamp(lines []LogLine) {
 			lines[j-1], lines[j] = lines[j], lines[j-1]
 		}
 	}
+}
+
+type reloadParams struct {
+	ConfigPath string `json:"config_path"`
+}
+
+func (s *Server) handleReload(raw json.RawMessage) (any, error) {
+	var p reloadParams
+	_ = json.Unmarshal(raw, &p)
+	if p.ConfigPath == "" {
+		return nil, fmt.Errorf("config_path parameter required")
+	}
+	cfg, err := loadConfigForReload(p.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+	report := s.sup.Reload(cfg)
+	return report, nil
 }
 
 type waitParams struct {
