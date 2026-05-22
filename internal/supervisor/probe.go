@@ -11,6 +11,10 @@ import (
 	"regexp"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/ccakes/workbench/internal/config"
 	"github.com/ccakes/workbench/internal/logbuf"
 )
@@ -83,6 +87,12 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 		parts := cfg.Command.Parts
 		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
 			return probeExecOnce(ctx, parts, perAttempt, logs)
+		})
+	case "grpc":
+		addr := cfg.Address
+		svcName := cfg.Service
+		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
+			return probeGRPCOnce(ctx, addr, svcName, perAttempt)
 		})
 	default:
 		return false
@@ -208,4 +218,29 @@ func streamProbeLines(r io.Reader, logs *logbuf.Buffer, stream string) {
 		logs.Add(stream, sc.Text())
 	}
 	_ = sc.Err() // ignore: pipe closure on cmd exit is normal
+}
+
+// probeGRPCOnce performs a single grpc.health.v1.Health/Check call. Returns
+// true iff the server responds with SERVING for the requested service (empty
+// service name = overall server health). The connection is dialled with
+// insecure credentials — readiness probes target the local dev stack, not
+// production endpoints.
+func probeGRPCOnce(ctx context.Context, addr, service string, perAttemptTimeout time.Duration) bool {
+	attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	client := healthpb.NewHealthClient(conn)
+	resp, err := client.Check(attemptCtx, &healthpb.HealthCheckRequest{Service: service})
+	if err != nil {
+		return false
+	}
+	return resp.GetStatus() == healthpb.HealthCheckResponse_SERVING
 }

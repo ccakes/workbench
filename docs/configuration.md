@@ -156,11 +156,12 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `kind` | string | `none`, `log_pattern`, `tcp`, `http`, or `exec` |
+| `kind` | string | `none`, `log_pattern`, `tcp`, `http`, `exec`, or `grpc` |
 | `pattern` | string | Go regular expression matched against log lines (for `log_pattern`) |
-| `address` | string | TCP address to dial, `host:port` (for `tcp`) |
+| `address` | string | TCP address to dial, `host:port` (for `tcp` and `grpc`) |
 | `url` | string | HTTP URL to GET; any 2xx response means ready (for `http`) |
 | `command` | string or list | Shell command or argv to run (for `exec`); exit 0 = ready |
+| `service` | string | gRPC service name (for `grpc`); empty = overall server health |
 | `timeout` | duration | Per-attempt probe timeout (default `2s`) |
 | `initial_delay` | duration | Delay before the first probe attempt |
 | `interval` | duration | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
@@ -187,6 +188,11 @@ dependents parked in Pending.
 - **`exec`** runs `command` with a `timeout` deadline per attempt. Exit 0 = ready.
   stdout/stderr from the probe is appended to the service's log buffer tagged
   with stream `probe`, so you can see what the probe is observing.
+- **`grpc`** issues a `grpc.health.v1.Health/Check` call against `address`. Ready
+  when the server responds with status `SERVING`. Set `service` to probe a
+  specific gRPC service registered for health reporting; leave it empty to
+  probe overall server health. Useful for gRPC services that take time to
+  finish initialising even after the listening port opens.
 
 `settle` covers the case where TCP/HTTP comes up before the service is really
 ready (think postgres opening the listening socket before recovery completes).

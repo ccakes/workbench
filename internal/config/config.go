@@ -190,6 +190,7 @@ type ReadinessConfig struct {
 	Address      string   `yaml:"address"`
 	URL          string   `yaml:"url"`
 	Command      *Command `yaml:"command"`
+	Service      string   `yaml:"service"` // gRPC service name; empty = overall server health
 	Timeout      Duration `yaml:"timeout"`
 	InitialDelay Duration `yaml:"initial_delay"`
 	Interval     Duration `yaml:"interval"`

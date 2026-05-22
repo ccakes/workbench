@@ -820,6 +820,8 @@ func TestValidate_ReadinessKinds(t *testing.T) {
 		{name: "invalid kind", readiness: ReadinessConfig{Kind: "bogus"}, wantErr: "invalid readiness kind"},
 		{name: "exec valid", readiness: ReadinessConfig{Kind: "exec", Command: &Command{Parts: []string{"echo", "ok"}}}, wantErr: ""},
 		{name: "exec missing command", readiness: ReadinessConfig{Kind: "exec"}, wantErr: "requires a command"},
+		{name: "grpc valid", readiness: ReadinessConfig{Kind: "grpc", Address: "localhost:50051"}, wantErr: ""},
+		{name: "grpc missing address", readiness: ReadinessConfig{Kind: "grpc"}, wantErr: "requires an address"},
 		{name: "negative max_attempts", readiness: ReadinessConfig{Kind: "none", MaxAttempts: -1}, wantErr: "max_attempts must be >= 0"},
 		{name: "negative interval", readiness: ReadinessConfig{Kind: "none", Interval: Duration{Duration: -time.Second}}, wantErr: "interval must be >= 0"},
 		{name: "negative settle", readiness: ReadinessConfig{Kind: "none", Settle: Duration{Duration: -time.Second}}, wantErr: "settle must be >= 0"},

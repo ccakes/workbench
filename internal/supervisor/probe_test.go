@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/ccakes/workbench/internal/config"
 	"github.com/ccakes/workbench/internal/logbuf"
 )
@@ -392,6 +394,57 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 	elapsed := time.Since(start)
 	if elapsed < 150*time.Millisecond {
 		t.Errorf("expected runProbe to wait for settle, returned in %v", elapsed)
+	}
+}
+
+func TestProbeGRPC_Serving(t *testing.T) {
+	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_SERVING, "")
+	cfg := config.ReadinessConfig{
+		Kind:    "grpc",
+		Address: addr,
+		Timeout: config.Duration{Duration: 500 * time.Millisecond},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected grpc probe to succeed when status=SERVING")
+	}
+}
+
+func TestProbeGRPC_NotServingThenSucceeds(t *testing.T) {
+	// Server starts NOT_SERVING, flips to SERVING after a delay. The probe
+	// should retry through the not-serving period until it lands SERVING.
+	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_NOT_SERVING, "")
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		grpcHealthFlip(addr, healthpb.HealthCheckResponse_SERVING)
+	}()
+	cfg := config.ReadinessConfig{
+		Kind:     "grpc",
+		Address:  addr,
+		Timeout:  config.Duration{Duration: 200 * time.Millisecond},
+		Interval: config.Duration{Duration: 50 * time.Millisecond},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected grpc probe to succeed after server flips to SERVING")
+	}
+}
+
+func TestProbeGRPC_MaxAttemptsCap(t *testing.T) {
+	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_NOT_SERVING, "")
+	cfg := config.ReadinessConfig{
+		Kind:        "grpc",
+		Address:     addr,
+		Timeout:     config.Duration{Duration: 100 * time.Millisecond},
+		Interval:    config.Duration{Duration: 10 * time.Millisecond},
+		MaxAttempts: 2,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected grpc probe to give up after MaxAttempts when not SERVING")
 	}
 }
 

@@ -92,7 +92,7 @@ func (c *Config) Validate() error {
 		}
 
 		switch svc.Readiness.Kind {
-		case "", "none", "log_pattern", "tcp", "http", "exec":
+		case "", "none", "log_pattern", "tcp", "http", "exec", "grpc":
 			// valid
 		default:
 			errs = append(errs, fmt.Sprintf("%s: invalid readiness kind %q", prefix, svc.Readiness.Kind))
@@ -109,6 +109,9 @@ func (c *Config) Validate() error {
 		}
 		if svc.Readiness.Kind == "exec" && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind exec requires a command", prefix))
+		}
+		if svc.Readiness.Kind == "grpc" && svc.Readiness.Address == "" {
+			errs = append(errs, fmt.Sprintf("%s: readiness kind grpc requires an address", prefix))
 		}
 		if svc.Readiness.MaxAttempts < 0 {
 			errs = append(errs, fmt.Sprintf("%s: readiness max_attempts must be >= 0", prefix))
