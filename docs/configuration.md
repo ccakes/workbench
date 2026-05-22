@@ -8,6 +8,17 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 2. `bench.yml` or `bench.yaml` in the current directory
 3. Walk parent directories until one is found
 
+## Strict field validation
+
+Unknown YAML fields are rejected at parse time. A typo such as `expect_status: 200` under a `readiness:` block produces:
+
+```
+error: parsing config bench.yml: parsing config: yaml: unmarshal errors:
+  line 9: field expect_status not found in type config.ReadinessConfig
+```
+
+Run `bench validate` to surface these errors without starting any services.
+
 ## Schema
 
 ### Root

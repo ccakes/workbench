@@ -112,30 +112,58 @@ func loadConfig(configPath string) (*config.Config, error) {
 // connectToRunning attempts to connect to a running bench instance.
 // If socketOverride or BENCH_SOCKET is set, config resolution is skipped.
 func connectToRunning(configPath, socketOverride string) (*api.Client, error) {
-	var sockPath string
+	var (
+		sockPath string
+		resolved string
+		source   string // describes where sockPath came from, for diagnostics
+	)
 
-	// Direct socket override doesn't need config
-	if socketOverride != "" {
+	switch {
+	case socketOverride != "":
 		sockPath = socketOverride
-	} else if envSock := os.Getenv("BENCH_SOCKET"); envSock != "" {
-		sockPath = envSock
-	} else {
-		// Need config to derive socket path
-		resolved, err := resolveConfigPath(configPath)
+		source = "--socket"
+	case os.Getenv("BENCH_SOCKET") != "":
+		sockPath = os.Getenv("BENCH_SOCKET")
+		source = "BENCH_SOCKET"
+	default:
+		r, err := resolveConfigPath(configPath)
 		if err != nil {
 			return nil, err
 		}
-		sockPath, err = api.SocketPath(resolved)
+		resolved = r
+		sp, err := api.SocketPath(resolved)
 		if err != nil {
 			return nil, err
 		}
+		sockPath = sp
+		source = "config"
 	}
 
 	client := api.NewClient(sockPath)
 	if err := client.Ping(); err != nil {
-		return nil, fmt.Errorf("no running bench instance found: %w", err)
+		return nil, noRunningBenchError(sockPath, resolved, source, err)
 	}
 	return client, nil
+}
+
+// noRunningBenchError formats a connect failure with enough context to act on:
+// the resolved config path (if any), the expected socket path, and a hint
+// showing the exact command that would start a bench for this config.
+func noRunningBenchError(sockPath, configPath, source string, cause error) error {
+	if source == "config" && configPath != "" {
+		return fmt.Errorf(
+			"no bench up is running for config %s (expected socket %s).\n"+
+				"  start it with: bench up --config %s\n"+
+				"  underlying error: %v",
+			configPath, sockPath, configPath, cause,
+		)
+	}
+	return fmt.Errorf(
+		"no bench up is running on socket %s (from %s).\n"+
+			"  start one with: bench up\n"+
+			"  underlying error: %v",
+		sockPath, source, cause,
+	)
 }
 
 func runUp(args []string) int {
@@ -309,7 +337,7 @@ func runStart(args []string) int {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
 	socketOverride := fs.String("socket", "", "control socket path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(reorderFlags(args))
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -337,7 +365,7 @@ func runStop(args []string) int {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
 	socketOverride := fs.String("socket", "", "control socket path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(reorderFlags(args))
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -365,7 +393,7 @@ func runRestart(args []string) int {
 	fs := flag.NewFlagSet("restart", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config file")
 	socketOverride := fs.String("socket", "", "control socket path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(reorderFlags(args))
 
 	services := fs.Args()
 	if len(services) == 0 {
@@ -395,12 +423,13 @@ func runStatus(args []string) int {
 	configPath := fs.String("config", "", "path to config file")
 	socketOverride := fs.String("socket", "", "control socket path")
 	jsonOut := fs.Bool("json", false, "JSON output")
-	_ = fs.Parse(args)
+	why := fs.Bool("why", false, "show last_error column for all services")
+	_ = fs.Parse(reorderFlags(args))
 
 	// Try connecting to a running instance for live status
 	client, connErr := connectToRunning(*configPath, *socketOverride)
 	if connErr == nil {
-		return statusFromRunning(client, *jsonOut, fs.Args())
+		return statusFromRunning(client, *jsonOut, *why, fs.Args())
 	}
 
 	// Fall back to config-only output
@@ -449,7 +478,9 @@ func runStatus(args []string) int {
 }
 
 // statusFromRunning queries live status from a running bench instance.
-func statusFromRunning(client *api.Client, jsonOut bool, serviceFilter []string) int {
+// When showWhy is true, the REASON column (last_error) is shown for every row;
+// otherwise it appears only for services whose status indicates a problem.
+func statusFromRunning(client *api.Client, jsonOut, showWhy bool, serviceFilter []string) int {
 	var params map[string]string
 	if len(serviceFilter) > 0 {
 		params = map[string]string{"service": serviceFilter[0]}
@@ -484,14 +515,15 @@ func statusFromRunning(client *api.Client, jsonOut bool, serviceFilter []string)
 		}
 	}
 
-	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %s\n", "SERVICE", "TYPE", "STATUS", "PID", "RESTARTS", "UPTIME")
-	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %s\n",
+	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %-12s %s\n", "SERVICE", "TYPE", "STATUS", "PID", "RESTARTS", "UPTIME", "REASON")
+	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %-12s %s\n",
 		strings.Repeat("-", 20),
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 12),
 		strings.Repeat("-", 8),
 		strings.Repeat("-", 10),
-		strings.Repeat("-", 12))
+		strings.Repeat("-", 12),
+		strings.Repeat("-", 30))
 
 	for _, svc := range services {
 		pid := "-"
@@ -502,15 +534,44 @@ func statusFromRunning(client *api.Client, jsonOut bool, serviceFilter []string)
 		if svc.Uptime != "" {
 			uptime = svc.Uptime
 		}
-		fmt.Printf("%-20s %-10s %-12s %-8s %-10d %s\n",
+		reason := statusReason(svc, showWhy)
+		fmt.Printf("%-20s %-10s %-12s %-8s %-10d %-12s %s\n",
 			svc.Key,
 			svc.Type,
 			svc.Status,
 			pid,
 			svc.RestartCount,
-			uptime)
+			uptime,
+			reason)
 	}
 	return 0
+}
+
+// statusReason picks a short, single-line reason to show in the REASON column.
+// With showWhy=true, last_error is always shown if non-empty. Otherwise only
+// statuses that already imply a problem (failed/backoff/restarting) surface it,
+// so a healthy stack stays uncluttered.
+func statusReason(s api.ServiceStatus, showWhy bool) string {
+	if s.LastError == "" {
+		return ""
+	}
+	if !showWhy {
+		switch s.Status {
+		case "failed", "backoff", "restarting":
+			// fall through
+		default:
+			return ""
+		}
+	}
+	line := s.LastError
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	const maxReason = 60
+	if len(line) > maxReason {
+		line = line[:maxReason-1] + "…"
+	}
+	return line
 }
 
 func statusJSON(cfg *config.Config) int {

@@ -26,20 +26,22 @@ type statusParams struct {
 
 // ServiceStatus is the wire format for a service status response. Exported for CLI reuse.
 type ServiceStatus struct {
-	Key          string   `json:"key"`
-	DisplayName  string   `json:"display_name"`
-	Status       string   `json:"status"`
-	Type         string   `json:"type"`
-	PID          int      `json:"pid,omitempty"`
-	ContainerID  string   `json:"container_id,omitempty"`
-	Image        string   `json:"image,omitempty"`
-	Uptime       string   `json:"uptime,omitempty"`
-	ExitCode     int      `json:"exit_code,omitempty"`
-	RestartCount int      `json:"restart_count"`
-	LastRestart  string   `json:"last_restart,omitempty"`
-	LastError    string   `json:"last_error,omitempty"`
-	WatchEnabled bool     `json:"watch_enabled"`
-	Ports        []string `json:"ports,omitempty"`
+	Key           string   `json:"key"`
+	DisplayName   string   `json:"display_name"`
+	Status        string   `json:"status"`
+	Type          string   `json:"type"`
+	PID           int      `json:"pid,omitempty"`
+	ContainerID   string   `json:"container_id,omitempty"`
+	Image         string   `json:"image,omitempty"`
+	Uptime        string   `json:"uptime,omitempty"`
+	ExitCode      int      `json:"exit_code,omitempty"`
+	RestartCount  int      `json:"restart_count"`
+	LastRestart   string   `json:"last_restart,omitempty"`
+	LastError     string   `json:"last_error,omitempty"`
+	LastLogLine   string   `json:"last_log_line,omitempty"`
+	LastLogStream string   `json:"last_log_stream,omitempty"`
+	WatchEnabled  bool     `json:"watch_enabled"`
+	Ports         []string `json:"ports,omitempty"`
 }
 
 func (s *Server) handleStatus(raw json.RawMessage) (any, error) {
@@ -86,6 +88,12 @@ func (s *Server) buildServiceStatus(key string) ServiceStatus {
 	uptime := snap.Uptime()
 	if uptime > 0 {
 		st.Uptime = uptime.String()
+	}
+	if buf := s.sup.ServiceLogs(key); buf != nil {
+		if lines := buf.Last(1); len(lines) > 0 {
+			st.LastLogLine = lines[0].Text
+			st.LastLogStream = lines[0].Stream
+		}
 	}
 	return st
 }

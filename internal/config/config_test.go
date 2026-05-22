@@ -247,6 +247,68 @@ func TestParse_InvalidYAML(t *testing.T) {
 	}
 }
 
+// TestParse_RejectsUnknownFields covers the strict-mode behaviour added to
+// catch silent typos like `expect_status: 200` under a readiness block.
+func TestParse_RejectsUnknownFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantSub string
+	}{
+		{
+			name: "unknown readiness field",
+			yaml: `
+version: 1
+services:
+  api:
+    dir: /tmp
+    command: "echo hi"
+    readiness:
+      kind: http
+      url: "http://localhost:8080/health"
+      expect_status: 200
+`,
+			wantSub: "expect_status",
+		},
+		{
+			name: "unknown top-level service field",
+			yaml: `
+version: 1
+services:
+  api:
+    dir: /tmp
+    command: "echo hi"
+    autostart: true
+`,
+			wantSub: "autostart",
+		},
+		{
+			name: "unknown global field",
+			yaml: `
+version: 1
+global:
+  log_buffer_size: 1000
+services:
+  api:
+    dir: /tmp
+    command: "echo hi"
+`,
+			wantSub: "log_buffer_size",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.yaml), "/tmp")
+			if err == nil {
+				t.Fatalf("expected parse error mentioning %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error to mention %q, got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
 func TestParse_AutoStart(t *testing.T) {
 	yaml := []byte(`
 version: 1

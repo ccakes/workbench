@@ -55,7 +55,9 @@ Returns service snapshots. Without params, returns all services. With `service` 
 {"method": "status", "params": {"service": "web"}}
 ```
 
-Response fields per service: `key`, `display_name`, `status`, `type`, `pid`, `container_id`, `image`, `uptime`, `exit_code`, `restart_count`, `last_restart`, `last_error`, `watch_enabled`, `ports`.
+Response fields per service: `key`, `display_name`, `status`, `type`, `pid`, `container_id`, `image`, `uptime`, `exit_code`, `restart_count`, `last_restart`, `last_error`, `last_log_line`, `last_log_stream`, `watch_enabled`, `ports`.
+
+`last_log_line` and `last_log_stream` are populated from the most recent line in the service's log ring buffer at the time of the call. Useful for monitoring scripts that want a one-call snapshot of "is this service healthy and what was it most recently saying" without a follow-up `logs` round trip.
 
 ### start
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -333,9 +334,16 @@ func Parse(data []byte, baseDir string) (*Config, error) {
 
 // parseRaw unmarshals YAML and resolves relative paths against baseDir. It
 // does not apply defaults or resolve `extends:`.
+//
+// Unknown fields are rejected via KnownFields(true). Silent typos in config
+// (e.g. `expect_status` under a readiness block) used to be ignored; they now
+// fail loudly so the user discovers the mistake at validate time instead of
+// at runtime when the misconfigured feature silently does nothing.
 func parseRaw(data []byte, baseDir string) (*Config, error) {
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	resolveRelativePaths(&cfg, baseDir)
