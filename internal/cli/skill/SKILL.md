@@ -88,3 +88,5 @@ Otherwise run `bench restart <service>`.
 - Log buffers are ring buffers — very old logs may have rotated out
 - There is no multi-service log stream; fetch logs per service separately
 - Unknown YAML fields are rejected by `bench validate` and `bench up`. A typo like `expect_status` under `readiness:` will fail loudly rather than silently doing nothing
+- Readiness probe kinds: `tcp`, `http`, `log_pattern`, `exec`. `exec` runs an arbitrary command and treats exit 0 as ready; use it for services where TCP is up before the app really is (cassandra auth, postgres recovery, etc.). Probe stdout/stderr appears in the service log buffer tagged with stream `probe`.
+- Readiness supports `settle` (delay between probe success and Ready) and `max_attempts` (cap on retries before failing) when the simple "retry forever" default is wrong

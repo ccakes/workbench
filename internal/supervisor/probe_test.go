@@ -291,3 +291,129 @@ func TestRunProbe_NoneKindIsInstantReady(t *testing.T) {
 		t.Error("'none' kind should be instant-ready")
 	}
 }
+
+func TestProbeExec_ExitZeroReady(t *testing.T) {
+	cfg := config.ReadinessConfig{
+		Kind:    "exec",
+		Command: &config.Command{Parts: []string{"sh", "-c", "exit 0"}},
+		Timeout: config.Duration{Duration: 2 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected exec probe to succeed on exit 0")
+	}
+}
+
+func TestProbeExec_StreamsOutputToLogs(t *testing.T) {
+	buf := logbuf.New(50)
+	cfg := config.ReadinessConfig{
+		Kind:    "exec",
+		Command: &config.Command{Parts: []string{"sh", "-c", "echo hello-probe && exit 0"}},
+		Timeout: config.Duration{Duration: 2 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !runProbe(ctx, cfg, buf, 0) {
+		t.Fatal("expected exec probe to succeed")
+	}
+	// Give the streaming goroutine a moment to drain.
+	time.Sleep(50 * time.Millisecond)
+	found := false
+	for _, line := range buf.Lines() {
+		if strings.Contains(line.Text, "hello-probe") && line.Stream == "probe" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected exec probe stdout to appear in log buffer tagged 'probe', got: %v", buf.Lines())
+	}
+}
+
+func TestProbeExec_MaxAttemptsCap(t *testing.T) {
+	// A command that always fails should give up after MaxAttempts and return false.
+	cfg := config.ReadinessConfig{
+		Kind:        "exec",
+		Command:     &config.Command{Parts: []string{"sh", "-c", "exit 1"}},
+		Timeout:     config.Duration{Duration: 200 * time.Millisecond},
+		Interval:    config.Duration{Duration: 10 * time.Millisecond},
+		MaxAttempts: 3,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	if runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected exec probe to fail when command always exits non-zero")
+	}
+	elapsed := time.Since(start)
+	if elapsed > 1*time.Second {
+		t.Errorf("expected probe to give up quickly with MaxAttempts=3, took %v", elapsed)
+	}
+}
+
+func TestProbeTCP_MaxAttemptsCap(t *testing.T) {
+	// Closed port + MaxAttempts=2 should bail quickly instead of looping
+	// until ctx cancellation.
+	cfg := config.ReadinessConfig{
+		Kind:        "tcp",
+		Address:     freeAddr(t),
+		Timeout:     config.Duration{Duration: 50 * time.Millisecond},
+		Interval:    config.Duration{Duration: 10 * time.Millisecond},
+		MaxAttempts: 2,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected tcp probe to give up after MaxAttempts")
+	}
+}
+
+func TestProbeSettleDelaysReady(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	cfg := config.ReadinessConfig{
+		Kind:    "tcp",
+		Address: listenerAddr(l),
+		Timeout: config.Duration{Duration: 200 * time.Millisecond},
+		Settle:  config.Duration{Duration: 150 * time.Millisecond},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	if !runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected probe to succeed")
+	}
+	elapsed := time.Since(start)
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("expected runProbe to wait for settle, returned in %v", elapsed)
+	}
+}
+
+func TestProbeSettleCancellable(t *testing.T) {
+	// If ctx cancels mid-settle, runProbe must return false rather than wait
+	// out the settle delay.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	cfg := config.ReadinessConfig{
+		Kind:    "tcp",
+		Address: listenerAddr(l),
+		Timeout: config.Duration{Duration: 200 * time.Millisecond},
+		Settle:  config.Duration{Duration: 5 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if runProbe(ctx, cfg, nil, 0) {
+		t.Fatal("expected runProbe to return false when settle is interrupted")
+	}
+}

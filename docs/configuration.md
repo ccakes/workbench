@@ -156,20 +156,26 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `kind` | string | `none`, `log_pattern`, `tcp`, or `http` |
+| `kind` | string | `none`, `log_pattern`, `tcp`, `http`, or `exec` |
 | `pattern` | string | Go regular expression matched against log lines (for `log_pattern`) |
 | `address` | string | TCP address to dial, `host:port` (for `tcp`) |
 | `url` | string | HTTP URL to GET; any 2xx response means ready (for `http`) |
+| `command` | string or list | Shell command or argv to run (for `exec`); exit 0 = ready |
 | `timeout` | duration | Per-attempt probe timeout (default `2s`) |
 | `initial_delay` | duration | Delay before the first probe attempt |
+| `interval` | duration | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
+| `max_attempts` | integer | Cap on probe attempts before giving up (default `0` = unlimited) |
+| `settle` | duration | Delay between probe-success and the Ready transition |
 
 Every service transitions `Starting → Running → Ready`. Services without a
 probe are promoted to **Ready** immediately once the process is up — so
 **Ready** is the uniform "good to go" steady state. Services with a probe
 configured stay in **Running** until the probe succeeds, then transition to
-**Ready**. Probes retry indefinitely on failure; they never mark the service
-as Failed. If a probe never succeeds, investigate the configuration — the
-service will sit in Running with dependents parked in Pending.
+**Ready**. By default probes retry indefinitely on failure; set
+`max_attempts` to cap retries and have the supervisor cancel the probe
+when exhausted (dependents then cascade to Failed). If a probe never
+succeeds and `max_attempts` is unset, the service will sit in Running with
+dependents parked in Pending.
 
 - **`log_pattern`** scans each new stdout/stderr line against the regex,
   starting from lines emitted after the probe begins (so a stale match from a
@@ -178,6 +184,15 @@ service will sit in Running with dependents parked in Pending.
   successful connect wins.
 - **`http`** issues `GET url` using an `http.Client` with `timeout`. Any 2xx
   response marks the service Ready.
+- **`exec`** runs `command` with a `timeout` deadline per attempt. Exit 0 = ready.
+  stdout/stderr from the probe is appended to the service's log buffer tagged
+  with stream `probe`, so you can see what the probe is observing.
+
+`settle` covers the case where TCP/HTTP comes up before the service is really
+ready (think postgres opening the listening socket before recovery completes).
+If set, the supervisor sleeps for `settle` after the probe passes before
+marking the service Ready. Dependents do not unblock until the settle delay
+elapses.
 
 ## Composition with `extends`
 

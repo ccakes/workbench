@@ -1,10 +1,13 @@
 package supervisor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"time"
 
@@ -20,13 +23,16 @@ const (
 )
 
 // runProbe blocks until the configured readiness check succeeds or ctx is
-// cancelled. Returns true on success, false on cancellation or unrecoverable
-// setup error (e.g. invalid regex). baselineSeq is the log-buffer sequence
-// number captured immediately before the probe started, so log_pattern scans
-// only this process instance's output.
+// cancelled. Returns true on success, false on cancellation, unrecoverable
+// setup error (e.g. invalid regex), or exhausted MaxAttempts. baselineSeq is
+// the log-buffer sequence number captured immediately before the probe
+// started, so log_pattern scans only this process instance's output.
 //
-// When logs is non-nil, setup errors (bad regex) are appended to it as an
-// "probe" stream line so the user can diagnose without reading exit codes.
+// When logs is non-nil, setup errors (bad regex, exec exit codes) are appended
+// to it as a "probe" stream line so the user can diagnose without reading
+// exit codes. On success, the configured `settle` delay is observed before
+// returning true so dependents do not unblock during the gap between
+// "probe passed" and "service really ready."
 func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buffer, baselineSeq uint64) bool {
 	kind := cfg.Kind
 	if kind == "" || kind == "none" {
@@ -37,6 +43,10 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 	if perAttempt <= 0 {
 		perAttempt = probeDefaultTimeout
 	}
+	interval := cfg.Interval.Duration
+	if interval <= 0 {
+		interval = probeRetryInterval
+	}
 
 	if cfg.InitialDelay.Duration > 0 {
 		if !sleepCtx(ctx, cfg.InitialDelay.Duration) {
@@ -44,6 +54,7 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 		}
 	}
 
+	var ok bool
 	switch kind {
 	case "log_pattern":
 		re, err := regexp.Compile(cfg.Pattern)
@@ -53,13 +64,61 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 			}
 			return false
 		}
-		return probeLogPattern(ctx, logs, re, baselineSeq)
+		ok = probeLogPattern(ctx, logs, re, baselineSeq)
 	case "tcp":
-		return probeTCP(ctx, cfg.Address, perAttempt)
+		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
+			return probeTCPOnce(ctx, cfg.Address, perAttempt)
+		})
 	case "http":
-		return probeHTTP(ctx, cfg.URL, perAttempt)
+		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
+			return probeHTTPOnce(ctx, cfg.URL, perAttempt)
+		})
+	case "exec":
+		if cfg.Command == nil || len(cfg.Command.Parts) == 0 {
+			if logs != nil {
+				logs.Add("stderr", "readiness: exec kind requires a command")
+			}
+			return false
+		}
+		parts := cfg.Command.Parts
+		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
+			return probeExecOnce(ctx, parts, perAttempt, logs)
+		})
+	default:
+		return false
 	}
-	return false
+
+	if !ok {
+		return false
+	}
+	if cfg.Settle.Duration > 0 {
+		if !sleepCtx(ctx, cfg.Settle.Duration) {
+			return false
+		}
+	}
+	return true
+}
+
+// retryProbe repeatedly invokes attempt until it returns true, ctx is
+// cancelled, or maxAttempts is reached (0 = unlimited). It sleeps `interval`
+// between attempts.
+func retryProbe(ctx context.Context, maxAttempts int, interval time.Duration, attempt func() bool) bool {
+	tries := 0
+	for {
+		if attempt() {
+			return true
+		}
+		tries++
+		if ctx.Err() != nil {
+			return false
+		}
+		if maxAttempts > 0 && tries >= maxAttempts {
+			return false
+		}
+		if !sleepCtx(ctx, interval) {
+			return false
+		}
+	}
 }
 
 // sleepCtx sleeps for d or returns false if ctx is cancelled first.
@@ -99,45 +158,54 @@ func probeLogPattern(ctx context.Context, logs *logbuf.Buffer, re *regexp.Regexp
 	}
 }
 
-func probeTCP(ctx context.Context, addr string, perAttemptTimeout time.Duration) bool {
+func probeTCPOnce(ctx context.Context, addr string, perAttemptTimeout time.Duration) bool {
 	var dialer net.Dialer
-	for {
-		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
-		conn, err := dialer.DialContext(attemptCtx, "tcp", addr)
-		cancel()
-		if err == nil {
-			_ = conn.Close()
-			return true
-		}
-		if ctx.Err() != nil {
-			return false
-		}
-		if !sleepCtx(ctx, probeRetryInterval) {
-			return false
-		}
+	attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+	defer cancel()
+	conn, err := dialer.DialContext(attemptCtx, "tcp", addr)
+	if err != nil {
+		return false
 	}
+	_ = conn.Close()
+	return true
 }
 
-func probeHTTP(ctx context.Context, url string, perAttemptTimeout time.Duration) bool {
+func probeHTTPOnce(ctx context.Context, url string, perAttemptTimeout time.Duration) bool {
 	client := &http.Client{Timeout: perAttemptTimeout}
-	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			// Bad URL — not a retryable condition.
-			return false
-		}
-		resp, err := client.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return true
-			}
-		}
-		if ctx.Err() != nil {
-			return false
-		}
-		if !sleepCtx(ctx, probeRetryInterval) {
-			return false
-		}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
 	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func probeExecOnce(ctx context.Context, parts []string, perAttemptTimeout time.Duration, logs *logbuf.Buffer) bool {
+	attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(attemptCtx, parts[0], parts[1:]...)
+	if logs != nil {
+		outR, outW := io.Pipe()
+		errR, errW := io.Pipe()
+		cmd.Stdout = outW
+		cmd.Stderr = errW
+		go streamProbeLines(outR, logs, "probe")
+		go streamProbeLines(errR, logs, "probe")
+		defer outW.Close()
+		defer errW.Close()
+	}
+	err := cmd.Run()
+	return err == nil
+}
+
+func streamProbeLines(r io.Reader, logs *logbuf.Buffer, stream string) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		logs.Add(stream, sc.Text())
+	}
+	_ = sc.Err() // ignore: pipe closure on cmd exit is normal
 }

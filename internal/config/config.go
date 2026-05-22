@@ -177,8 +177,12 @@ type ReadinessConfig struct {
 	Pattern      string   `yaml:"pattern"`
 	Address      string   `yaml:"address"`
 	URL          string   `yaml:"url"`
+	Command      *Command `yaml:"command"`
 	Timeout      Duration `yaml:"timeout"`
 	InitialDelay Duration `yaml:"initial_delay"`
+	Interval     Duration `yaml:"interval"`
+	Settle       Duration `yaml:"settle"`
+	MaxAttempts  int      `yaml:"max_attempts"`
 }
 
 type TracingConfig struct {

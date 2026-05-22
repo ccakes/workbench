@@ -92,7 +92,7 @@ func (c *Config) Validate() error {
 		}
 
 		switch svc.Readiness.Kind {
-		case "", "none", "log_pattern", "tcp", "http":
+		case "", "none", "log_pattern", "tcp", "http", "exec":
 			// valid
 		default:
 			errs = append(errs, fmt.Sprintf("%s: invalid readiness kind %q", prefix, svc.Readiness.Kind))
@@ -106,6 +106,18 @@ func (c *Config) Validate() error {
 		}
 		if svc.Readiness.Kind == "http" && svc.Readiness.URL == "" {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind http requires a url", prefix))
+		}
+		if svc.Readiness.Kind == "exec" && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
+			errs = append(errs, fmt.Sprintf("%s: readiness kind exec requires a command", prefix))
+		}
+		if svc.Readiness.MaxAttempts < 0 {
+			errs = append(errs, fmt.Sprintf("%s: readiness max_attempts must be >= 0", prefix))
+		}
+		if svc.Readiness.Interval.Duration < 0 {
+			errs = append(errs, fmt.Sprintf("%s: readiness interval must be >= 0", prefix))
+		}
+		if svc.Readiness.Settle.Duration < 0 {
+			errs = append(errs, fmt.Sprintf("%s: readiness settle must be >= 0", prefix))
 		}
 	}
 

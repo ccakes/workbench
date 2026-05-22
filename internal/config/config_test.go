@@ -818,6 +818,11 @@ func TestValidate_ReadinessKinds(t *testing.T) {
 		{name: "http valid", readiness: ReadinessConfig{Kind: "http", URL: "http://localhost"}, wantErr: ""},
 		{name: "http missing url", readiness: ReadinessConfig{Kind: "http"}, wantErr: "requires a url"},
 		{name: "invalid kind", readiness: ReadinessConfig{Kind: "bogus"}, wantErr: "invalid readiness kind"},
+		{name: "exec valid", readiness: ReadinessConfig{Kind: "exec", Command: &Command{Parts: []string{"echo", "ok"}}}, wantErr: ""},
+		{name: "exec missing command", readiness: ReadinessConfig{Kind: "exec"}, wantErr: "requires a command"},
+		{name: "negative max_attempts", readiness: ReadinessConfig{Kind: "none", MaxAttempts: -1}, wantErr: "max_attempts must be >= 0"},
+		{name: "negative interval", readiness: ReadinessConfig{Kind: "none", Interval: Duration{Duration: -time.Second}}, wantErr: "interval must be >= 0"},
+		{name: "negative settle", readiness: ReadinessConfig{Kind: "none", Settle: Duration{Duration: -time.Second}}, wantErr: "settle must be >= 0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
