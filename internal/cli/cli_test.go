@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ccakes/workbench/internal/config"
 )
 
 func TestReorderFlags(t *testing.T) {
@@ -99,6 +101,54 @@ services:
 	}
 	if !strings.Contains(stdout, "base") || !strings.Contains(stdout, "app") {
 		t.Fatalf("validate output did not include inherited and child services; stdout: %s", stdout)
+	}
+}
+
+func TestApplyServiceSubset(t *testing.T) {
+	cfg := &config.Config{
+		Services: map[string]config.ServiceConfig{
+			"web":    {DependsOn: []string{"db"}},
+			"db":     {},
+			"worker": {},
+		},
+	}
+	if err := applyServiceSubset(cfg, []string{"web"}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	web := cfg.Services["web"]
+	db := cfg.Services["db"]
+	worker := cfg.Services["worker"]
+	if !web.GetAutoStart() {
+		t.Error("web should be auto_start after subset")
+	}
+	if !db.GetAutoStart() {
+		t.Error("db should be auto_start (transitive dep of web)")
+	}
+	if worker.GetAutoStart() {
+		t.Error("worker should be auto_start=false (outside subset)")
+	}
+}
+
+func TestApplyProfileFilter(t *testing.T) {
+	cfg := &config.Config{
+		Services: map[string]config.ServiceConfig{
+			"always":   {}, // no profiles -> always on
+			"core-a":   {Profiles: []string{"core"}, DependsOn: []string{"db"}},
+			"core-b":   {Profiles: []string{"core"}},
+			"frontend": {Profiles: []string{"frontend"}},
+			"db":       {}, // pulled in transitively by core-a
+		},
+	}
+	applyProfileFilter(cfg, []string{"core"})
+	for _, key := range []string{"always", "core-a", "core-b", "db"} {
+		svc := cfg.Services[key]
+		if !svc.GetAutoStart() {
+			t.Errorf("expected %s to be auto_start under profile=core", key)
+		}
+	}
+	frontend := cfg.Services["frontend"]
+	if frontend.GetAutoStart() {
+		t.Error("frontend should be disabled when profile=core is active")
 	}
 }
 

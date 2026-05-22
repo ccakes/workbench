@@ -8,6 +8,33 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 2. `bench.yml` or `bench.yaml` in the current directory
 3. Walk parent directories until one is found
 
+## Environment variable interpolation
+
+`${VAR}` and `$VAR` references are expanded against the parent process's
+environment, but **only** in the following fields:
+
+- `global.env.*` values
+- `global.env_file` path
+- `services.<name>.env.*` values
+- `services.<name>.env_file` path
+
+Other string fields (`command`, `readiness.pattern`, `readiness.url`,
+`container.image`, etc.) are left as-is, since `$` is common in shell
+commands and regex patterns and expanding it would surprise users far more
+than it helps.
+
+```yaml
+services:
+  api:
+    env:
+      DB_PASS: ${DATABASE_PASSWORD}      # expanded
+      TOKEN_PREFIX: "tok-${ENVIRONMENT}" # expanded
+    command: "./bin/api --pw $DB_PASS"   # NOT expanded; runs through the shell
+```
+
+If a referenced variable is unset, it expands to the empty string (matching
+Go's `os.ExpandEnv`).
+
 ## Strict field validation
 
 Unknown YAML fields are rejected at parse time. A typo such as `expect_status: 200` under a `readiness:` block produces:
@@ -199,6 +226,37 @@ ready (think postgres opening the listening socket before recovery completes).
 If set, the supervisor sleeps for `settle` after the probe passes before
 marking the service Ready. Dependents do not unblock until the settle delay
 elapses.
+
+### Profiles
+
+A service can declare `profiles: [name1, name2]`. By default, services with no
+profile are always launched. Services with one or more profiles are only
+launched when `bench up --profile <name>` activates at least one of them.
+
+```yaml
+services:
+  postgres: {}             # always-on
+  flagman:
+    profiles: [core]
+  portal:
+    profiles: [frontend]
+```
+
+```bash
+bench up                    # postgres only (no profiles active)
+bench up --profile core     # postgres + flagman
+bench up --profile core --profile frontend  # postgres + flagman + portal
+```
+
+When `bench up <service>` is invoked with positional arguments, the explicit
+service list wins — profile flags are ignored, and the named services + their
+transitive deps come up regardless of profile.
+
+### Group
+
+`group: <name>` is a display-only tag used by the TUI to organise the service
+list. It has no runtime behaviour. Services without a group are listed
+unstructured.
 
 ### Setup hook
 

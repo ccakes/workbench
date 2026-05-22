@@ -2258,6 +2258,50 @@ services:
 	assertContains(t, err.Error(), "extends")
 }
 
+func TestExpandEnvInConfig(t *testing.T) {
+	t.Setenv("BENCH_TEST_DB_PASS", "s3cret")
+	t.Setenv("BENCH_TEST_TOKEN", "abc")
+	tmp := t.TempDir()
+
+	dir := tmp + "/svc"
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := tmp + "/bench.yml"
+	yaml := `
+version: 1
+global:
+  env:
+    GLOBAL_VAR: "g-${BENCH_TEST_TOKEN}"
+services:
+  api:
+    dir: svc
+    command: "echo $LITERAL"
+    env:
+      DB_PASS: "${BENCH_TEST_DB_PASS}"
+      LITERAL: "no-expansion-here-$$"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := cfg.Services["api"].Env["DB_PASS"]; got != "s3cret" {
+		t.Errorf("DB_PASS = %q, want s3cret", got)
+	}
+	if got := cfg.Global.Env["GLOBAL_VAR"]; got != "g-abc" {
+		t.Errorf("GLOBAL_VAR = %q, want g-abc", got)
+	}
+	// Command was NOT expanded — the literal $LITERAL stays.
+	if got := cfg.Services["api"].Command.Parts[2]; got != "echo $LITERAL" {
+		t.Errorf("command should not be expanded; got %q", got)
+	}
+}
+
 func TestTransitiveDeps(t *testing.T) {
 	cfg := &Config{
 		Services: map[string]ServiceConfig{

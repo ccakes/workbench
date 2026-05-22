@@ -4,7 +4,38 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestLastSince(t *testing.T) {
+	buf := New(10)
+	buf.Add("stdout", "old-line")
+	t1 := time.Now()
+	// Ensure subsequent lines have a strictly later timestamp than t1.
+	time.Sleep(20 * time.Millisecond)
+	buf.Add("stdout", "new-1")
+	buf.Add("stdout", "new-2")
+
+	lines := buf.LastSince(t1, 10)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines since t1, got %d (%+v)", len(lines), lines)
+	}
+	if lines[0].Text != "new-1" || lines[1].Text != "new-2" {
+		t.Errorf("expected new-1, new-2; got %q, %q", lines[0].Text, lines[1].Text)
+	}
+
+	// limit caps the result from the tail.
+	limited := buf.LastSince(t1, 1)
+	if len(limited) != 1 || limited[0].Text != "new-2" {
+		t.Errorf("expected only new-2 with limit=1, got %+v", limited)
+	}
+
+	// since=future returns nothing.
+	future := buf.LastSince(time.Now().Add(time.Hour), 10)
+	if len(future) != 0 {
+		t.Errorf("expected no lines for future timestamp, got %d", len(future))
+	}
+}
 
 func TestAdd(t *testing.T) {
 	buf := New(10)

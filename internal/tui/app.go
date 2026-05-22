@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/ccakes/workbench/internal/spanbuf"
 	"github.com/ccakes/workbench/internal/supervisor"
 )
+
+func sortStrings(s []string) { sort.Strings(s) }
 
 const (
 	paneList = iota
@@ -359,19 +362,38 @@ func (m Model) viewServiceList(width, height int) string {
 	b.WriteString(styleTitle.Render("Services"))
 	b.WriteString("\n")
 
-	for i, key := range m.services {
-		if i >= height-1 {
+	// Decide whether to render group headers. We only inject them when at
+	// least one service has a `group:` field set — otherwise the list looks
+	// like it did before for the no-config-change case.
+	useGroups := false
+	for _, key := range m.services {
+		if cfg := m.sup.ServiceConfig(key); cfg != nil && cfg.Group != "" {
+			useGroups = true
 			break
+		}
+	}
+
+	rendered := 0
+	emitGroupHeader := func(name string) bool {
+		if rendered >= height-1 {
+			return false
+		}
+		b.WriteString(styleLabel.Render(name))
+		b.WriteString("\n")
+		rendered++
+		return true
+	}
+	emitService := func(i int, key string) bool {
+		if rendered >= height-1 {
+			return false
 		}
 		info := m.sup.ServiceInfo(key)
 		if info == nil {
-			continue
+			return true
 		}
 		snap := info.Snapshot()
-
 		indicator := statusIndicator(snap.Status.String())
 		name := snap.Name()
-		displayName := name
 		status := snap.Status.String()
 		styledStatus := statusStyle(status).Render(status)
 
@@ -380,12 +402,9 @@ func (m Model) viewServiceList(width, height int) string {
 			uptime = " " + formatDuration(snap.Uptime())
 		}
 
-		// Calculate name column width to fill the line.
-		// indicator (2) + spaces (3) + name + uptime + status must fit in width.
 		suffixLen := len(uptime) + 1 + len(status)
-		nameWidth := max(1, width-suffixLen-5) // 5 = " " + indicator + " " + " " before uptime/status + margin
-		truncatedName := truncate(displayName, nameWidth)
-		// Pad name with spaces (plain text, so len() == visual width)
+		nameWidth := max(1, width-suffixLen-5)
+		truncatedName := truncate(name, nameWidth)
 		padded := truncatedName + strings.Repeat(" ", max(0, nameWidth-len(truncatedName)))
 
 		line := " " + indicator + " " + padded
@@ -395,20 +414,72 @@ func (m Model) viewServiceList(width, height int) string {
 		line += " " + styledStatus
 
 		if i == m.selected {
-			// Pad to full pane width so background highlight spans the row
 			lineVisual := ansi.StringWidth(line)
 			if lineVisual < width {
 				line += strings.Repeat(" ", width-lineVisual)
 			}
 			line = styleSelected.Render(line)
 		}
-
 		b.WriteString(line)
-		if i < len(m.services)-1 {
-			b.WriteString("\n")
+		b.WriteString("\n")
+		rendered++
+		return true
+	}
+
+	if !useGroups {
+		for i, key := range m.services {
+			if !emitService(i, key) {
+				break
+			}
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	// Group services preserving original index for selection mapping.
+	type entry struct {
+		i   int
+		key string
+	}
+	grouped := make(map[string][]entry)
+	var groupOrder []string
+	var ungrouped []entry
+	for i, key := range m.services {
+		var groupName string
+		if cfg := m.sup.ServiceConfig(key); cfg != nil {
+			groupName = cfg.Group
+		}
+		if groupName == "" {
+			ungrouped = append(ungrouped, entry{i, key})
+			continue
+		}
+		if _, seen := grouped[groupName]; !seen {
+			groupOrder = append(groupOrder, groupName)
+		}
+		grouped[groupName] = append(grouped[groupName], entry{i, key})
+	}
+	sortStrings(groupOrder)
+
+	for _, g := range groupOrder {
+		if !emitGroupHeader(g) {
+			return strings.TrimRight(b.String(), "\n")
+		}
+		for _, e := range grouped[g] {
+			if !emitService(e.i, e.key) {
+				return strings.TrimRight(b.String(), "\n")
+			}
 		}
 	}
-	return b.String()
+	if len(ungrouped) > 0 {
+		if !emitGroupHeader("Other") {
+			return strings.TrimRight(b.String(), "\n")
+		}
+		for _, e := range ungrouped {
+			if !emitService(e.i, e.key) {
+				return strings.TrimRight(b.String(), "\n")
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) viewDetail(width, height int) string {

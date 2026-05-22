@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +23,10 @@ import (
 	"github.com/ccakes/workbench/internal/tui"
 	"github.com/ccakes/workbench/internal/watcher"
 )
+
+// execCommand is a thin alias around exec.Command so tests can stub it out
+// if needed without touching production code.
+var execCommand = exec.Command
 
 var Version = "dev"
 
@@ -42,6 +48,10 @@ func Run() int {
 		return runStatus(os.Args[2:])
 	case "logs":
 		return runLogs(os.Args[2:])
+	case "wait":
+		return runWait(os.Args[2:])
+	case "clean":
+		return runClean(os.Args[2:])
 	case "validate":
 		return runValidate(os.Args[2:])
 	case "import-compose":
@@ -74,6 +84,8 @@ Commands:
   restart            Restart specific services
   status             Show service status
   logs               Show service logs
+  wait               Block until services reach ready
+  clean              Remove stale socket and prefix-matched containers
   validate           Validate configuration
   import-compose     Convert docker-compose.yml to bench.yml
   agent-skill        Print embedded agent skill with save options
@@ -173,6 +185,8 @@ func runUp(args []string) int {
 	noTUI := fs.Bool("no-tui", false, "disable TUI, run in foreground")
 	noWatch := fs.Bool("no-watch", false, "disable file watching")
 	verbose := fs.Bool("verbose", false, "verbose output")
+	var profiles stringSlice
+	fs.Var(&profiles, "profile", "activate the named profile (repeatable)")
 	_ = fs.Parse(reorderFlags(args))
 
 	cfg, err := loadConfig(*configPath)
@@ -191,6 +205,8 @@ func runUp(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
+	} else if len(profiles) > 0 {
+		applyProfileFilter(cfg, profiles)
 	}
 
 	// Check Docker availability if any container services exist
@@ -289,6 +305,65 @@ func runUp(args []string) int {
 	}
 	sup.Shutdown()
 	return 0
+}
+
+// stringSlice is a flag.Value that accumulates repeated --flag values into
+// a slice. Used for --profile, which is repeatable like in docker-compose.
+type stringSlice []string
+
+func (s *stringSlice) String() string { return strings.Join(*s, ",") }
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
+// applyProfileFilter overrides auto_start so only services matching the
+// active profile set will launch. A service is started if (a) it has no
+// `profiles:` set (always-on), or (b) at least one of its profiles is in the
+// active set. Transitive depends_on of started services are pulled in too,
+// so a profile-tagged service's dependencies still come up even if they
+// themselves carry a different profile or no profile.
+func applyProfileFilter(cfg *config.Config, active []string) {
+	activeSet := make(map[string]bool, len(active))
+	for _, p := range active {
+		activeSet[p] = true
+	}
+
+	// First pass: identify roots — services that should be started.
+	var roots []string
+	for key, svc := range cfg.Services {
+		if len(svc.Profiles) == 0 {
+			roots = append(roots, key)
+			continue
+		}
+		for _, p := range svc.Profiles {
+			if activeSet[p] {
+				roots = append(roots, key)
+				break
+			}
+		}
+	}
+
+	// Pull transitive deps into the closure so dependencies are honoured.
+	keep, err := cfg.TransitiveDeps(roots)
+	if err != nil {
+		// Shouldn't happen — roots come from cfg.Services. If somehow it
+		// does, fall back to leaving cfg untouched rather than crashing.
+		return
+	}
+	off := false
+	for key, svc := range cfg.Services {
+		if keep[key] {
+			if svc.AutoStart == nil {
+				on := true
+				svc.AutoStart = &on
+				cfg.Services[key] = svc
+			}
+			continue
+		}
+		svc.AutoStart = &off
+		cfg.Services[key] = svc
+	}
 }
 
 // applyServiceSubset disables auto_start on every service that is not in the
@@ -651,14 +726,22 @@ func runLogs(args []string) int {
 	last := fs.Int("last", 100, "number of log lines to fetch")
 	follow := fs.Bool("follow", false, "follow log output (poll)")
 	followShort := fs.Bool("f", false, "follow log output (shorthand)")
+	grep := fs.String("grep", "", "filter lines by regex (client-side)")
+	since := fs.Duration("since", 0, "only show lines newer than this duration ago (e.g. 5m)")
 	_ = fs.Parse(reorderFlags(args))
 
 	services := fs.Args()
-	if len(services) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: bench logs <service>\n")
-		return 1
+	multi := len(services) != 1
+
+	var grepRe *regexp.Regexp
+	if *grep != "" {
+		re, err := regexp.Compile(*grep)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: invalid --grep regex: %v\n", err)
+			return 1
+		}
+		grepRe = re
 	}
-	svcName := services[0]
 
 	client, err := connectToRunning(*configPath, *socketOverride)
 	if err != nil {
@@ -666,8 +749,9 @@ func runLogs(args []string) int {
 		return 1
 	}
 
-	// cursor tracks the seq of the last line printed to avoid duplicates
-	var cursor uint64
+	var cursor uint64                 // single-service follow cursor
+	lastTs := time.Time{}             // multi-service follow cursor
+	doFollow := *follow || *followShort
 
 	fetchAndPrint := func(params map[string]any) error {
 		data, err := client.Call("logs", params)
@@ -679,11 +763,22 @@ func runLogs(args []string) int {
 			return err
 		}
 		for _, l := range lines {
-			ts := l.Timestamp
-			if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
-				ts = t.Format("15:04:05")
+			if grepRe != nil && !grepRe.MatchString(l.Text) {
+				continue
 			}
-			fmt.Printf("[%s] %s|%s: %s\n", ts, svcName, l.Stream, l.Text)
+			ts := l.Timestamp
+			parsed, perr := time.Parse(time.RFC3339Nano, l.Timestamp)
+			if perr == nil {
+				ts = parsed.Format("15:04:05")
+				if parsed.After(lastTs) {
+					lastTs = parsed
+				}
+			}
+			tag := l.Service
+			if tag == "" && !multi {
+				tag = services[0]
+			}
+			fmt.Printf("[%s] %s|%s: %s\n", ts, tag, l.Stream, l.Text)
 			if l.Seq > cursor {
 				cursor = l.Seq
 			}
@@ -691,17 +786,32 @@ func runLogs(args []string) int {
 		return nil
 	}
 
-	// Initial fetch
-	if err := fetchAndPrint(map[string]any{"service": svcName, "last": *last}); err != nil {
+	// Build initial request params.
+	initial := map[string]any{"last": *last}
+	switch {
+	case multi:
+		if len(services) > 0 {
+			initial["services"] = services
+		}
+	default:
+		initial["service"] = services[0]
+	}
+	if *since > 0 {
+		initial["since_ms"] = since.Milliseconds()
+	}
+	if err := fetchAndPrint(initial); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 
-	if !*follow && !*followShort {
+	if !doFollow {
 		return 0
 	}
 
-	// Poll for new logs using sequence cursor to avoid duplicates
+	// Poll for new logs. Single-service follow uses the seq cursor; multi
+	// uses a timestamp window so we don't need per-service cursors over the
+	// wire. Some duplication is possible on the seam — `--grep` and the
+	// terminal usually mask it.
 	sigCh := make(chan os.Signal, 1)
 	signalNotify(sigCh)
 	for {
@@ -709,9 +819,19 @@ func runLogs(args []string) int {
 		case <-sigCh:
 			return 0
 		case <-time.After(time.Second):
-			params := map[string]any{"service": svcName, "last": 500}
-			if cursor > 0 {
-				params["after_seq"] = cursor
+			params := map[string]any{"last": 500}
+			if multi {
+				if len(services) > 0 {
+					params["services"] = services
+				}
+				if !lastTs.IsZero() {
+					params["since_ms"] = time.Since(lastTs).Milliseconds() + 1
+				}
+			} else {
+				params["service"] = services[0]
+				if cursor > 0 {
+					params["after_seq"] = cursor
+				}
 			}
 			if err := fetchAndPrint(params); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -740,6 +860,146 @@ func reorderFlags(args []string) []string {
 		}
 	}
 	return append(flags, positional...)
+}
+
+func runClean(args []string) int {
+	fs := flag.NewFlagSet("clean", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	force := fs.Bool("force", false, "clean even if a bench is currently running")
+	dryRun := fs.Bool("dry-run", false, "show what would be removed without doing it")
+	_ = fs.Parse(reorderFlags(args))
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	resolved, _ := resolveConfigPath(*configPath)
+	sockPath, err := api.SocketPath(resolved)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	// Refuse if a bench is currently running on this socket unless --force.
+	// We test by pinging — a successful ping means an owner is alive.
+	probe := api.NewClient(sockPath)
+	if err := probe.Ping(); err == nil && !*force {
+		fmt.Fprintf(os.Stderr, "a bench is running on %s — stop it first or pass --force\n", sockPath)
+		return 1
+	}
+
+	prefix := cfg.Global.ContainerPrefix
+	containers, err := listContainersWithPrefix(prefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not enumerate containers: %v\n", err)
+	}
+
+	if *dryRun {
+		fmt.Printf("would remove socket: %s\n", sockPath)
+		for _, c := range containers {
+			fmt.Printf("would remove container: %s\n", c)
+		}
+		return 0
+	}
+
+	if _, err := os.Stat(sockPath); err == nil {
+		if err := os.Remove(sockPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing socket: %v\n", err)
+		} else {
+			fmt.Printf("removed socket: %s\n", sockPath)
+		}
+	}
+
+	for _, c := range containers {
+		if err := dockerRemove(c); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing container %s: %v\n", c, err)
+			continue
+		}
+		fmt.Printf("removed container: %s\n", c)
+	}
+	return 0
+}
+
+// listContainersWithPrefix returns container names whose name starts with
+// the given prefix. Uses docker CLI directly so we don't have to vendor the
+// Docker SDK.
+func listContainersWithPrefix(prefix string) ([]string, error) {
+	if prefix == "" {
+		return nil, nil
+	}
+	cmd := execCommand("docker", "ps", "-aq", "--filter", "name="+prefix+"-", "--format", "{{.Names}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		names = append(names, line)
+	}
+	return names, nil
+}
+
+func dockerRemove(name string) error {
+	// stop then remove; ignore stop failure (container may already be stopped)
+	_ = execCommand("docker", "stop", name).Run()
+	return execCommand("docker", "rm", "-f", name).Run()
+}
+
+func runWait(args []string) int {
+	fs := flag.NewFlagSet("wait", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
+	timeout := fs.Duration("timeout", 5*time.Minute, "max time to wait")
+	_ = fs.Parse(reorderFlags(args))
+
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	params := map[string]any{
+		"services":   fs.Args(),
+		"timeout_ms": timeout.Milliseconds(),
+	}
+	data, err := client.Call("wait", params)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	var result api.WaitResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "error: parsing wait response: %v\n", err)
+		return 1
+	}
+
+	switch result.Outcome {
+	case "ready":
+		for svc, st := range result.States {
+			fmt.Printf("%-20s %s\n", svc, st)
+		}
+		return 0
+	case "failed":
+		for svc, st := range result.States {
+			fmt.Fprintf(os.Stderr, "%-20s %s\n", svc, st)
+		}
+		fmt.Fprintln(os.Stderr, "one or more services failed to reach ready")
+		return 1
+	case "timeout":
+		for svc, st := range result.States {
+			fmt.Fprintf(os.Stderr, "%-20s %s\n", svc, st)
+		}
+		fmt.Fprintf(os.Stderr, "timeout after %s\n", time.Duration(result.WaitedMs)*time.Millisecond)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "unexpected outcome %q\n", result.Outcome)
+	return 1
 }
 
 func runValidate(args []string) int {

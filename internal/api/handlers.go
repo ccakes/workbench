@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ccakes/workbench/internal/events"
 	"github.com/ccakes/workbench/internal/logbuf"
 	"github.com/ccakes/workbench/internal/spanbuf"
 )
@@ -145,9 +146,11 @@ func (s *Server) handleRestart(raw json.RawMessage) (any, error) {
 }
 
 type logsParams struct {
-	Service  string `json:"service"`
+	Service  string `json:"service"`           // single service (legacy form)
+	Services []string `json:"services"`        // multi-service tail; empty + no Service = all
 	Last     int    `json:"last"`
-	AfterSeq uint64 `json:"after_seq"` // sequence cursor — return only lines with seq > this value
+	AfterSeq uint64 `json:"after_seq"`         // sequence cursor — return only lines with seq > this value (single-service only)
+	SinceMs  int64  `json:"since_ms"`          // return only lines with timestamp >= now - SinceMs
 }
 
 // LogLine is the wire format for a log line. Exported for CLI reuse.
@@ -156,39 +159,191 @@ type LogLine struct {
 	Stream    string `json:"stream"`
 	Text      string `json:"text"`
 	Seq       uint64 `json:"seq"`
+	Service   string `json:"service,omitempty"` // populated in multi-service responses
 }
 
 func (s *Server) handleLogs(raw json.RawMessage) (any, error) {
 	var p logsParams
-	if err := json.Unmarshal(raw, &p); err != nil || p.Service == "" {
-		return nil, fmt.Errorf("service parameter required")
-	}
+	_ = json.Unmarshal(raw, &p)
+
 	n := p.Last
 	if n <= 0 {
 		n = 100
 	}
-	buf := s.sup.ServiceLogs(p.Service)
-	if buf == nil {
-		return nil, fmt.Errorf("unknown service %q", p.Service)
+
+	// Decide which services we're fetching from.
+	var targets []string
+	switch {
+	case p.Service != "":
+		targets = []string{p.Service}
+	case len(p.Services) > 0:
+		targets = p.Services
+	default:
+		targets = s.sup.ServiceKeys()
 	}
 
-	var lines []logbuf.Line
-	if p.AfterSeq > 0 {
-		lines = buf.LastAfter(p.AfterSeq, n)
-	} else {
-		lines = buf.Last(n)
+	var since time.Time
+	if p.SinceMs > 0 {
+		since = time.Now().Add(-time.Duration(p.SinceMs) * time.Millisecond)
 	}
 
-	result := make([]LogLine, len(lines))
-	for i, l := range lines {
-		result[i] = LogLine{
-			Timestamp: l.Timestamp.Format(time.RFC3339Nano),
-			Stream:    l.Stream,
-			Text:      l.Text,
-			Seq:       l.Seq,
+	multi := len(targets) > 1 || p.Service == "" && len(p.Services) == 0
+	var result []LogLine
+	for _, svc := range targets {
+		buf := s.sup.ServiceLogs(svc)
+		if buf == nil {
+			if !multi {
+				return nil, fmt.Errorf("unknown service %q", svc)
+			}
+			continue
+		}
+		var lines []logbuf.Line
+		switch {
+		case !since.IsZero():
+			lines = buf.LastSince(since, n)
+		case p.AfterSeq > 0 && !multi:
+			lines = buf.LastAfter(p.AfterSeq, n)
+		default:
+			lines = buf.Last(n)
+		}
+		for _, l := range lines {
+			ll := LogLine{
+				Timestamp: l.Timestamp.Format(time.RFC3339Nano),
+				Stream:    l.Stream,
+				Text:      l.Text,
+				Seq:       l.Seq,
+			}
+			if multi {
+				ll.Service = svc
+			}
+			result = append(result, ll)
 		}
 	}
+
+	// Multi-service results are concatenated per-service; sort by timestamp
+	// so the client sees a unified chronological stream.
+	if multi {
+		sortLogLinesByTimestamp(result)
+	}
 	return result, nil
+}
+
+func sortLogLinesByTimestamp(lines []LogLine) {
+	// stable-ish via insertion sort — buffers are pre-sorted; merging keeps
+	// it cheap. For very long lists go's sort.Slice would be marginally
+	// better but rarely matters at human-readable log volumes.
+	for i := 1; i < len(lines); i++ {
+		for j := i; j > 0 && lines[j-1].Timestamp > lines[j].Timestamp; j-- {
+			lines[j-1], lines[j] = lines[j], lines[j-1]
+		}
+	}
+}
+
+type waitParams struct {
+	Services  []string `json:"services"`
+	TimeoutMs int64    `json:"timeout_ms"`
+}
+
+// WaitResult is the wire format for a wait response. Exit code semantics on
+// the client side: 0 = all targets reached ready, 1 = at least one terminal
+// failure (failed/stopped/disabled), 2 = timeout. The handler always returns
+// a populated result (not an error) so the client can render which services
+// did and didn't make it.
+type WaitResult struct {
+	Outcome  string            `json:"outcome"` // "ready", "failed", "timeout"
+	States   map[string]string `json:"states"`  // service -> last observed status
+	WaitedMs int64             `json:"waited_ms"`
+}
+
+func (s *Server) handleWait(raw json.RawMessage) (any, error) {
+	var p waitParams
+	_ = json.Unmarshal(raw, &p)
+
+	// Resolve the target set: explicit list or every auto-started service.
+	targets := p.Services
+	if len(targets) == 0 {
+		for _, key := range s.sup.ServiceKeys() {
+			cfg := s.sup.ServiceConfig(key)
+			if cfg != nil && cfg.GetAutoStart() {
+				targets = append(targets, key)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return WaitResult{Outcome: "ready", States: map[string]string{}}, nil
+	}
+
+	// Subscribe before reading initial state to avoid missing transitions
+	// that happen between the snapshot and subscription.
+	ch := s.sup.Bus().Subscribe(64)
+	defer s.sup.Bus().Unsubscribe(ch)
+
+	states := make(map[string]string, len(targets))
+	for _, key := range targets {
+		info := s.sup.ServiceInfo(key)
+		if info == nil {
+			return nil, fmt.Errorf("unknown service %q", key)
+		}
+		snap := info.Snapshot()
+		states[key] = snap.Status.String()
+	}
+
+	if outcome := waitOutcome(states); outcome != "" {
+		return WaitResult{Outcome: outcome, States: states}, nil
+	}
+
+	var timeoutCh <-chan time.Time
+	if p.TimeoutMs > 0 {
+		t := time.NewTimer(time.Duration(p.TimeoutMs) * time.Millisecond)
+		defer t.Stop()
+		timeoutCh = t.C
+	}
+	start := time.Now()
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return WaitResult{Outcome: "failed", States: states, WaitedMs: time.Since(start).Milliseconds()}, nil
+			}
+			if evt.Type != events.ServiceStateChanged {
+				continue
+			}
+			if _, tracked := states[evt.Service]; !tracked {
+				continue
+			}
+			data, ok := evt.Data.(events.StateChangeData)
+			if !ok {
+				continue
+			}
+			states[evt.Service] = data.NewStatus
+			if outcome := waitOutcome(states); outcome != "" {
+				return WaitResult{Outcome: outcome, States: states, WaitedMs: time.Since(start).Milliseconds()}, nil
+			}
+		case <-timeoutCh:
+			return WaitResult{Outcome: "timeout", States: states, WaitedMs: time.Since(start).Milliseconds()}, nil
+		}
+	}
+}
+
+// waitOutcome inspects the current state map and returns "ready" if all
+// targets are ready, "failed" if any is terminal (failed/stopped/disabled),
+// or "" if waiting should continue.
+func waitOutcome(states map[string]string) string {
+	allReady := true
+	for _, st := range states {
+		switch st {
+		case "ready":
+			// ok
+		case "failed", "stopped", "disabled":
+			return "failed"
+		default:
+			allReady = false
+		}
+	}
+	if allReady {
+		return "ready"
+	}
+	return ""
 }
 
 func (s *Server) handleToggleWatch(raw json.RawMessage) (any, error) {

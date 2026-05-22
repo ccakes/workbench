@@ -97,6 +97,25 @@ func (b *Buffer) LastAfter(afterSeq uint64, limit int) []Line {
 	return result
 }
 
+// LastSince returns buffered lines with Timestamp >= since, in chronological
+// order, capped at limit lines from the tail. Used by `bench logs --since`.
+func (b *Buffer) LastSince(since time.Time, limit int) []Line {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	var result []Line
+	for i := b.count - 1; i >= 0 && len(result) < limit; i-- {
+		line := b.lines[(b.start+i)%b.max]
+		if line.Timestamp.Before(since) {
+			break
+		}
+		result = append(result, line)
+	}
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+	return result
+}
+
 func (b *Buffer) Len() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

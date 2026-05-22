@@ -106,9 +106,21 @@ type ServiceConfig struct {
 	Watch           WatchConfig       `yaml:"watch"`
 	Readiness       ReadinessConfig   `yaml:"readiness"`
 	Setup           *SetupConfig      `yaml:"setup"`
+	Profiles        []string          `yaml:"profiles"`
+	Group           string            `yaml:"group"`
 	Labels          map[string]string `yaml:"labels"`
 	StopSignal      string            `yaml:"stop_signal"`
 	ShutdownTimeout *Duration         `yaml:"shutdown_timeout"`
+}
+
+// HasProfile returns true if this service is tagged with the given profile.
+func (s *ServiceConfig) HasProfile(name string) bool {
+	for _, p := range s.Profiles {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupConfig configures a post-ready hook that runs after the service's
@@ -328,7 +340,35 @@ func Load(path string) (*Config, error) {
 	if cfg.Global.ContainerPrefix == "" {
 		cfg.Global.ContainerPrefix = filepath.Base(filepath.Dir(abs))
 	}
+	expandEnvInConfig(cfg)
 	return cfg, nil
+}
+
+// expandEnvInConfig rewrites `${VAR}` and `$VAR` references found in env and
+// env_file fields against the parent process's environment. Other string
+// fields (commands, regexes, URLs) are intentionally untouched — `$` is
+// common in log_pattern regexes, and expanding it there would surprise
+// users far more than the convenience would help.
+func expandEnvInConfig(cfg *Config) {
+	if cfg.Global.EnvFile != "" {
+		cfg.Global.EnvFile = os.ExpandEnv(cfg.Global.EnvFile)
+	}
+	for k, v := range cfg.Global.Env {
+		cfg.Global.Env[k] = os.ExpandEnv(v)
+	}
+	for key, svc := range cfg.Services {
+		if svc.EnvFile != "" {
+			svc.EnvFile = os.ExpandEnv(svc.EnvFile)
+		}
+		if len(svc.Env) > 0 {
+			expanded := make(map[string]string, len(svc.Env))
+			for k, v := range svc.Env {
+				expanded[k] = os.ExpandEnv(v)
+			}
+			svc.Env = expanded
+		}
+		cfg.Services[key] = svc
+	}
 }
 
 // Parse parses YAML config data for a single file. Relative paths are resolved
