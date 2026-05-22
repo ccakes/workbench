@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,9 @@ import (
 	"github.com/ccakes/workbench/internal/events"
 	"github.com/ccakes/workbench/internal/service"
 )
+
+// osStat is a thin alias so test diff stays readable when adding file checks.
+var osStat = os.Stat
 
 // helper: build a config with a single service and sensible test defaults.
 func singleServiceConfig(t *testing.T, key string, command string, policy string, maxRetries int, backoff time.Duration) *config.Config {
@@ -1047,5 +1051,103 @@ func TestReadiness_RestartResetsBaseline(t *testing.T) {
 	})
 	if !ok {
 		t.Fatalf("expected Ready again after restart, got %s", getStatus(info))
+	}
+}
+
+// TestSetupHook_RunsBetweenProbeAndReady verifies that when a setup hook is
+// configured, the service transitions Running -> Setup -> Ready and dependents
+// wait until the setup command exits 0.
+func TestSetupHook_RunsBetweenProbeAndReady(t *testing.T) {
+	dir := t.TempDir()
+	marker := dir + "/setup-marker"
+
+	svc := longRunningSvc(dir)
+	svc.Setup = &config.SetupConfig{
+		Command: config.Command{Shell: true, Parts: []string{"sh", "-c", "touch " + marker}},
+		Timeout: config.Duration{Duration: 5 * time.Second},
+	}
+
+	cfg := &config.Config{
+		Version: 1,
+		Global: config.GlobalConfig{
+			ShutdownTimeout: config.Duration{Duration: 1 * time.Second},
+			LogBufferLines:  500,
+		},
+		Services: map[string]config.ServiceConfig{"svc": svc},
+	}
+
+	bus := events.NewBus()
+	sup := New(cfg, bus)
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer shutdownWithTimeout(t, sup)
+
+	info := sup.ServiceInfo("svc")
+	ok := pollUntil(t, 3*time.Second, 50*time.Millisecond, func() bool {
+		return getStatus(info) == service.StatusReady
+	})
+	if !ok {
+		t.Fatalf("expected Ready after setup hook, got %s", getStatus(info))
+	}
+	if _, err := osStat(marker); err != nil {
+		t.Fatalf("expected setup hook to create marker file: %v", err)
+	}
+}
+
+// TestSetupHook_FailureMarksServiceFailed verifies that a non-zero exit from
+// the setup hook fails the service without ever transitioning to Ready and
+// captures the error in LastError.
+func TestSetupHook_FailureMarksServiceFailed(t *testing.T) {
+	dir := t.TempDir()
+
+	svc := longRunningSvc(dir)
+	svc.Setup = &config.SetupConfig{
+		Command: config.Command{Shell: true, Parts: []string{"sh", "-c", "echo setup-bad >&2; exit 7"}},
+		Timeout: config.Duration{Duration: 5 * time.Second},
+	}
+
+	cfg := &config.Config{
+		Version: 1,
+		Global: config.GlobalConfig{
+			ShutdownTimeout: config.Duration{Duration: 1 * time.Second},
+			LogBufferLines:  500,
+		},
+		Services: map[string]config.ServiceConfig{"svc": svc},
+	}
+
+	bus := events.NewBus()
+	sup := New(cfg, bus)
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer shutdownWithTimeout(t, sup)
+
+	info := sup.ServiceInfo("svc")
+	ok := pollUntil(t, 3*time.Second, 50*time.Millisecond, func() bool {
+		return getStatus(info) == service.StatusFailed
+	})
+	if !ok {
+		t.Fatalf("expected Failed after setup hook exit 7, got %s", getStatus(info))
+	}
+	info.RLock()
+	lastErr := info.LastError
+	info.RUnlock()
+	if !strings.Contains(lastErr, "setup") {
+		t.Errorf("expected LastError to mention setup, got %q", lastErr)
+	}
+
+	// stdout/stderr from the setup command should appear in the log buffer
+	// tagged "setup".
+	buf := sup.ServiceLogs("svc")
+	found := false
+	for _, line := range buf.Lines() {
+		if strings.Contains(line.Text, "setup-bad") && line.Stream == "setup" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected setup stderr to appear in log buffer tagged 'setup'")
 	}
 }

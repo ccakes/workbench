@@ -12,6 +12,7 @@ const (
 	StatusPending Status = iota
 	StatusStarting
 	StatusRunning
+	StatusSetup
 	StatusReady
 	StatusStopping
 	StatusStopped
@@ -25,6 +26,7 @@ var statusNames = map[Status]string{
 	StatusPending:    "pending",
 	StatusStarting:   "starting",
 	StatusRunning:    "running",
+	StatusSetup:      "setup",
 	StatusReady:      "ready",
 	StatusStopping:   "stopping",
 	StatusStopped:    "stopped",
@@ -43,7 +45,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if the service has an active process.
 func (s Status) IsRunning() bool {
-	return s == StatusRunning || s == StatusReady || s == StatusStarting
+	return s == StatusRunning || s == StatusReady || s == StatusStarting || s == StatusSetup
 }
 
 // Info holds the runtime state of a service. All fields are protected by mu.
@@ -86,7 +88,7 @@ func (i *Info) Uptime() time.Duration {
 		return 0
 	}
 	switch i.Status {
-	case StatusRunning, StatusReady, StatusStarting:
+	case StatusRunning, StatusReady, StatusStarting, StatusSetup:
 		return time.Since(i.StartTime).Truncate(time.Second)
 	default:
 		if !i.StopTime.IsZero() {
@@ -156,7 +158,7 @@ func (s Snapshot) Uptime() time.Duration {
 		return 0
 	}
 	switch s.Status {
-	case StatusRunning, StatusReady, StatusStarting:
+	case StatusRunning, StatusReady, StatusStarting, StatusSetup:
 		return time.Since(s.StartTime).Truncate(time.Second)
 	default:
 		if !s.StopTime.IsZero() {

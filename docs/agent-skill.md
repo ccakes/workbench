@@ -31,3 +31,9 @@ bench agent-skill --print > custom-location.md
 ## What the skill does
 
 Once installed, the agent can invoke `bench` commands (status, logs, start, stop, restart, validate) to diagnose and manage services in your running dev environment. See the [skill source](../internal/cli/skill/SKILL.md) for the full prompt.
+
+## Version stamping and staleness checks
+
+Each time `bench agent-skill` runs, the binary stamps its own version (from `bench --version`) into the skill's frontmatter and body. The skill instructs the agent to compare the stamped version against the live `bench --version` at the start of every session; if they differ, the agent prompts the user to re-run `bench agent-skill` to refresh the saved skill.
+
+This keeps agent guidance from drifting behind shipped features when the binary upgrades but the saved skill file doesn't.

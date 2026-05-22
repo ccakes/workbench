@@ -119,6 +119,15 @@ func (c *Config) Validate() error {
 		if svc.Readiness.Settle.Duration < 0 {
 			errs = append(errs, fmt.Sprintf("%s: readiness settle must be >= 0", prefix))
 		}
+
+		if svc.Setup != nil {
+			if len(svc.Setup.Command.Parts) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: setup requires a command", prefix))
+			}
+			if svc.Setup.Timeout.Duration < 0 {
+				errs = append(errs, fmt.Sprintf("%s: setup timeout must be >= 0", prefix))
+			}
+		}
 	}
 
 	if err := c.checkCycles(); err != nil {
@@ -189,6 +198,37 @@ func (c *Config) checkCycles() error {
 		}
 	}
 	return nil
+}
+
+// TransitiveDeps returns the set of services reachable from roots via
+// depends_on, including the roots themselves. Unknown roots are reported as
+// an error. The result is a map for cheap membership tests; callers can
+// intersect it with StartOrder() to get a launch order.
+func (c *Config) TransitiveDeps(roots []string) (map[string]bool, error) {
+	set := make(map[string]bool, len(roots))
+	var visit func(string) error
+	visit = func(key string) error {
+		if set[key] {
+			return nil
+		}
+		svc, ok := c.Services[key]
+		if !ok {
+			return fmt.Errorf("unknown service %q", key)
+		}
+		set[key] = true
+		for _, dep := range svc.DependsOn {
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, r := range roots {
+		if err := visit(r); err != nil {
+			return nil, err
+		}
+	}
+	return set, nil
 }
 
 // StartOrder returns service keys in dependency-respecting start order

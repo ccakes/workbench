@@ -43,6 +43,13 @@ type managedService struct {
 
 	running bool // whether the run loop is active
 	mu      sync.Mutex
+
+	// setupErr is set by the probe/setup goroutine when the setup hook fails.
+	// The run loop's stop path checks this to surface Failed (with the setup
+	// error) instead of the usual Stopped, since the cause is internal — the
+	// service was killed because its bootstrap failed, not because the user
+	// stopped it.
+	setupErr string
 }
 
 func New(cfg *config.Config, bus *events.Bus) *Supervisor {
@@ -368,6 +375,23 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline) {
 				return
 			}
+			if ms.cfg.Setup != nil {
+				s.setStatus(ms, service.StatusSetup, "running setup hook")
+				if err := s.runSetupHook(probeCtx, ms); err != nil {
+					// Record the failure on the managed service. The runLoop's
+					// stop path sees setupErr and finalises as Failed (not
+					// Stopped) so the user can tell apart "I stopped this"
+					// from "its bootstrap exploded".
+					ms.mu.Lock()
+					ms.setupErr = fmt.Sprintf("setup hook: %v", err)
+					ms.mu.Unlock()
+					select {
+					case ms.stopCh <- struct{}{}:
+					default:
+					}
+					return
+				}
+			}
 			var reason string
 			if kind := ms.cfg.Readiness.Kind; kind != "" && kind != "none" {
 				reason = "readiness check passed"
@@ -416,6 +440,11 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		case <-ms.stopCh:
 			stopProbe()
+			ms.mu.Lock()
+			setupErr := ms.setupErr
+			ms.setupErr = ""
+			ms.mu.Unlock()
+
 			s.setStatus(ms, service.StatusStopping, "stopping")
 			ms.r.Stop(exitCh, timeout)
 			ms.info.Lock()
@@ -423,7 +452,13 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.Unlock()
-			s.setStatus(ms, service.StatusStopped, "stopped")
+			if setupErr != "" {
+				// Internal stop: setup hook failed. Surface Failed with the
+				// real cause so dependents cascade and the user sees why.
+				s.setStatus(ms, service.StatusFailed, setupErr)
+			} else {
+				s.setStatus(ms, service.StatusStopped, "stopped")
+			}
 			return
 
 		case reason := <-ms.restartCh:

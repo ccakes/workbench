@@ -105,9 +105,21 @@ type ServiceConfig struct {
 	Restart         RestartConfig     `yaml:"restart"`
 	Watch           WatchConfig       `yaml:"watch"`
 	Readiness       ReadinessConfig   `yaml:"readiness"`
+	Setup           *SetupConfig      `yaml:"setup"`
 	Labels          map[string]string `yaml:"labels"`
 	StopSignal      string            `yaml:"stop_signal"`
 	ShutdownTimeout *Duration         `yaml:"shutdown_timeout"`
+}
+
+// SetupConfig configures a post-ready hook that runs after the service's
+// readiness probe passes and before dependents are unblocked. Useful for
+// per-service bootstrap steps (creating dev users, seeding flag environments,
+// running migrations) that today require wrapping the service's command in a
+// shell pipeline.
+type SetupConfig struct {
+	Command Command           `yaml:"command"`
+	Timeout Duration          `yaml:"timeout"`
+	Env     map[string]string `yaml:"env"`
 }
 
 // IsContainer returns true if this service is a container service.

@@ -2255,3 +2255,37 @@ services:
 	}
 	assertContains(t, err.Error(), "extends")
 }
+
+func TestTransitiveDeps(t *testing.T) {
+	cfg := &Config{
+		Services: map[string]ServiceConfig{
+			"a": {DependsOn: []string{"b", "c"}},
+			"b": {DependsOn: []string{"d"}},
+			"c": {},
+			"d": {},
+			"e": {}, // unrelated
+		},
+	}
+
+	got, err := cfg.TransitiveDeps([]string{"a"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]bool{"a": true, "b": true, "c": true, "d": true}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d keys, got %d (%v)", len(want), len(got), got)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("expected %q in closure, missing", k)
+		}
+	}
+	if got["e"] {
+		t.Error("unrelated service e should not be in closure of {a}")
+	}
+
+	// Unknown root surfaces an error rather than silently being included.
+	if _, err := cfg.TransitiveDeps([]string{"nope"}); err == nil {
+		t.Error("expected error for unknown root")
+	}
+}

@@ -194,6 +194,38 @@ If set, the supervisor sleeps for `settle` after the probe passes before
 marking the service Ready. Dependents do not unblock until the settle delay
 elapses.
 
+### Setup hook
+
+A service can declare a `setup:` block that runs once the readiness probe
+passes (and after any `settle` delay), before the service transitions to
+**Ready** and before any dependents are unblocked. Use this for per-service
+bootstrap that's logically part of bringing this service up — creating a dev
+environment in a flag service, seeding a default DB user, applying migrations.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded |
+| `timeout` | duration | Cap on setup runtime (default `60s`) |
+| `env` | map | Extra env applied on top of the service's env |
+
+```yaml
+services:
+  flagman:
+    command: ./bin/flagman serve
+    readiness:
+      kind: http
+      url: http://localhost:4242/health
+    setup:
+      command: ./bin/flagman create-env development
+      timeout: 30s
+```
+
+The status flow is `Running → Setup → Ready`. On non-zero exit or timeout the
+supervisor stops the service and marks it **Failed** with the setup error in
+`last_error`, so dependents cascade just as they would for any other failure.
+Setup stdout/stderr is appended to the service's log buffer tagged with
+stream `setup` so you can see exactly what happened.
+
 ## Composition with `extends`
 
 A config file can declare a single parent file via `extends:`. Every service and global setting from the parent is inherited; the child adds its own services and overrides on top.

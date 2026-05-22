@@ -31,11 +31,14 @@ func runAgentSkill(args []string) int {
 	printOnly := fs.Bool("print", false, "print skill content and exit")
 	_ = fs.Parse(args)
 
-	data, err := skillFS.ReadFile("skill/SKILL.md")
+	raw, err := skillFS.ReadFile("skill/SKILL.md")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error reading embedded skill: %v\n", err)
 		return 1
 	}
+	// Stamp the binary's version into the skill so agents using a checked-in
+	// copy can detect when it's stale relative to the running bench.
+	data := []byte(strings.ReplaceAll(string(raw), "{{BENCH_VERSION}}", Version))
 
 	fmt.Print(string(data))
 

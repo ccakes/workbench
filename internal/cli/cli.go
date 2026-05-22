@@ -173,7 +173,7 @@ func runUp(args []string) int {
 	noTUI := fs.Bool("no-tui", false, "disable TUI, run in foreground")
 	noWatch := fs.Bool("no-watch", false, "disable file watching")
 	verbose := fs.Bool("verbose", false, "verbose output")
-	_ = fs.Parse(args)
+	_ = fs.Parse(reorderFlags(args))
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -184,6 +184,13 @@ func runUp(args []string) int {
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config validation failed:\n%v\n", err)
 		return 1
+	}
+
+	if roots := fs.Args(); len(roots) > 0 {
+		if err := applyServiceSubset(cfg, roots); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
 	}
 
 	// Check Docker availability if any container services exist
@@ -282,6 +289,34 @@ func runUp(args []string) int {
 	}
 	sup.Shutdown()
 	return 0
+}
+
+// applyServiceSubset disables auto_start on every service that is not in the
+// transitive depends_on closure of roots. Roots themselves and their
+// dependencies keep their existing auto_start setting, so a service the user
+// explicitly named on the CLI will start even if its config says
+// auto_start: false. Returns an error if any root is unknown.
+func applyServiceSubset(cfg *config.Config, roots []string) error {
+	keep, err := cfg.TransitiveDeps(roots)
+	if err != nil {
+		return err
+	}
+	off := false
+	for key, svc := range cfg.Services {
+		if keep[key] {
+			// Honour an explicit "auto_start: true" override for roots and
+			// their deps; default to enabled if unset.
+			if svc.AutoStart == nil {
+				on := true
+				svc.AutoStart = &on
+				cfg.Services[key] = svc
+			}
+			continue
+		}
+		svc.AutoStart = &off
+		cfg.Services[key] = svc
+	}
+	return nil
 }
 
 func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, verbose bool) int {
