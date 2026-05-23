@@ -349,6 +349,68 @@ func TestSocketPath(t *testing.T) {
 	}
 }
 
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "bench-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func TestSocketDirMode(t *testing.T) {
+	tmp := shortTempDir(t)
+	t.Setenv("TMPDIR", tmp)
+
+	sockPath, err := SocketPath(filepath.Join(tmp, "bench.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(sockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(t)
+	bus := events.NewBus()
+	sup := supervisor.New(cfg, bus)
+	srv := New(sup, nil, sockPath, "test")
+	if err := srv.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("socket dir mode = %o, want 700", got)
+	}
+}
+
+func TestClientCallTimeout(t *testing.T) {
+	cfg := testConfig(t)
+	bus := events.NewBus()
+	sup := supervisor.New(cfg, bus)
+	sockPath := filepath.Join(shortTempDir(t), "bench.sock")
+	srv := New(sup, nil, sockPath, "test")
+	if err := srv.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	client := NewClient(sockPath)
+	srv.handlers["slow"] = func(_ json.RawMessage) (any, error) {
+		time.Sleep(50 * time.Millisecond)
+		return map[string]string{"ok": "true"}, nil
+	}
+
+	if _, err := client.CallWithTimeout("slow", nil, time.Second); err != nil {
+		t.Fatalf("CallWithTimeout: %v", err)
+	}
+}
+
 func TestServiceMap(t *testing.T) {
 	cfg := testConfig(t)
 	bus := events.NewBus()

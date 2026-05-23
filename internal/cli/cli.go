@@ -28,6 +28,8 @@ import (
 // if needed without touching production code.
 var execCommand = exec.Command
 
+var validContainerPrefix = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 var Version = "dev"
 
 func Run() int {
@@ -752,8 +754,8 @@ func runLogs(args []string) int {
 		return 1
 	}
 
-	var cursor uint64                 // single-service follow cursor
-	lastTs := time.Time{}             // multi-service follow cursor
+	var cursor uint64     // single-service follow cursor
+	lastTs := time.Time{} // multi-service follow cursor
 	doFollow := *follow || *followShort
 
 	fetchAndPrint := func(params map[string]any) error {
@@ -942,6 +944,10 @@ func runClean(args []string) int {
 	}
 
 	prefix := cfg.Global.ContainerPrefix
+	if !validContainerPrefix.MatchString(prefix) {
+		fmt.Fprintf(os.Stderr, "error: invalid container_prefix %q\n", prefix)
+		return 1
+	}
 	containers, err := listContainersWithPrefix(prefix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not enumerate containers: %v\n", err)
@@ -980,20 +986,28 @@ func listContainersWithPrefix(prefix string) ([]string, error) {
 	if prefix == "" {
 		return nil, nil
 	}
-	cmd := execCommand("docker", "ps", "-aq", "--filter", "name="+prefix+"-", "--format", "{{.Names}}")
+	cmd := execCommand("docker", "ps", "-a", "--filter", "label=managed-by=bench", "--format", "{{.Names}}")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
+	return containerNamesWithPrefix(prefix, string(out)), nil
+}
+
+func containerNamesWithPrefix(prefix, out string) []string {
 	var names []string
-	for _, line := range strings.Split(string(out), "\n") {
+	want := prefix + "-"
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+		if !strings.HasPrefix(line, want) {
+			continue
+		}
 		names = append(names, line)
 	}
-	return names, nil
+	return names
 }
 
 func dockerRemove(name string) error {
@@ -1019,7 +1033,11 @@ func runWait(args []string) int {
 		"services":   fs.Args(),
 		"timeout_ms": timeout.Milliseconds(),
 	}
-	data, err := client.Call("wait", params)
+	callTimeout := time.Duration(0)
+	if *timeout > 0 {
+		callTimeout = *timeout + 5*time.Second
+	}
+	data, err := client.CallWithTimeout("wait", params, callTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -1099,4 +1117,3 @@ func signalNotify(ch chan<- os.Signal) {
 var signalNotifyFunc = func(ch chan<- os.Signal) {
 	// no-op fallback
 }
-

@@ -982,6 +982,52 @@ func TestReadiness_ProbeGoroutineExitsOnStop(t *testing.T) {
 	sup.Shutdown()
 }
 
+func TestReadiness_MaxAttemptsMarksServiceFailed(t *testing.T) {
+	dir := t.TempDir()
+
+	svc := longRunningSvc(dir)
+	svc.Readiness = config.ReadinessConfig{
+		Kind:        "tcp",
+		Address:     reservedAddr(t),
+		Timeout:     config.Duration{Duration: 50 * time.Millisecond},
+		Interval:    config.Duration{Duration: 10 * time.Millisecond},
+		MaxAttempts: 2,
+	}
+
+	cfg := &config.Config{
+		Version: 1,
+		Global: config.GlobalConfig{
+			ShutdownTimeout: config.Duration{Duration: 1 * time.Second},
+			LogBufferLines:  500,
+		},
+		Services: map[string]config.ServiceConfig{"svc": svc},
+	}
+
+	bus := events.NewBus()
+	sup := New(cfg, bus)
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer shutdownWithTimeout(t, sup)
+
+	info := sup.ServiceInfo("svc")
+	if !pollUntil(t, 3*time.Second, 20*time.Millisecond, func() bool {
+		return getStatus(info) == service.StatusFailed
+	}) {
+		t.Fatalf("expected svc to fail after readiness max_attempts, got %s", getStatus(info))
+	}
+	info.RLock()
+	lastErr := info.LastError
+	pid := info.PID
+	info.RUnlock()
+	if !strings.Contains(lastErr, "readiness probe failed after 2 attempts") {
+		t.Fatalf("expected readiness max_attempts error, got %q", lastErr)
+	}
+	if pid != 0 {
+		t.Fatalf("expected failed readiness to stop process and clear PID, got %d", pid)
+	}
+}
+
 // TestReadiness_RestartResetsBaseline verifies that after a restart, the
 // log_pattern probe matches a fresh "UP" line and transitions to Ready again
 // rather than being tripped (or not) by stale buffer contents.
@@ -1104,6 +1150,9 @@ func TestReload_RestartsChangedServices(t *testing.T) {
 	// Mutate `changed` so the diff fires.
 	changed := newCfg.Services["changed"]
 	changed.Env = map[string]string{"NEW": "v"}
+	changed.Name = "changed display"
+	on := true
+	changed.Watch.Enabled = &on
 	newCfg.Services["changed"] = changed
 
 	report := sup.Reload(newCfg)
@@ -1126,6 +1175,13 @@ func TestReload_RestartsChangedServices(t *testing.T) {
 		return getRestartCount(sup.ServiceInfo("changed")) > startCount
 	}) {
 		t.Errorf("expected restart count to bump for changed service")
+	}
+	snap := sup.ServiceInfo("changed").Snapshot()
+	if snap.DisplayName != "changed display" {
+		t.Errorf("expected display name metadata to update, got %q", snap.DisplayName)
+	}
+	if !snap.WatchEnabled {
+		t.Errorf("expected watch metadata to update after reload")
 	}
 }
 

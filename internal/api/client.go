@@ -23,13 +23,22 @@ func NewClient(sockPath string) *Client {
 
 // Call sends a request and returns the response data.
 func (c *Client) Call(method string, params any) (json.RawMessage, error) {
+	return c.CallWithTimeout(method, params, 10*time.Second)
+}
+
+// CallWithTimeout sends a request with a caller-supplied connection deadline.
+// A timeout <= 0 leaves the connection without a deadline after the initial
+// dial timeout, which is useful for long-running calls such as wait.
+func (c *Client) CallWithTimeout(method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	conn, err := net.DialTimeout("unix", c.sockPath, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to bench: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
 
 	req := Request{Method: method, Params: nil}
 	if params != nil {
@@ -88,8 +97,12 @@ func SocketPath(configPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving config path: %w", err)
 	}
+	dir, err := privateSocketDir()
+	if err != nil {
+		return "", err
+	}
 	h := sha256.Sum256([]byte(abs))
-	return fmt.Sprintf("/tmp/bench-%x.sock", h[:4]), nil
+	return filepath.Join(dir, fmt.Sprintf("bench-%x.sock", h[:4])), nil
 }
 
 // SocketPathFromEnvOrConfig returns the socket path from BENCH_SOCKET env,
@@ -102,4 +115,40 @@ func SocketPathFromEnvOrConfig(socketOverride, configPath string) (string, error
 		return envSock, nil
 	}
 	return SocketPath(configPath)
+}
+
+func privateSocketDir() (string, error) {
+	uid := os.Getuid()
+	name := "bench-user"
+	if uid >= 0 {
+		name = fmt.Sprintf("bench-%d", uid)
+	}
+	return filepath.Join(os.TempDir(), name), nil
+}
+
+func ensurePrivateSocketDir(sockPath string) error {
+	dir, err := privateSocketDir()
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(filepath.Dir(sockPath)) != filepath.Clean(dir) {
+		return nil
+	}
+	info, err := os.Lstat(dir)
+	switch {
+	case os.IsNotExist(err):
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return fmt.Errorf("creating socket directory %s: %w", dir, err)
+		}
+	case err != nil:
+		return fmt.Errorf("checking socket directory %s: %w", dir, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("socket directory %s is a symlink", dir)
+	case !info.IsDir():
+		return fmt.Errorf("socket directory %s is not a directory", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("protecting socket directory %s: %w", dir, err)
+	}
+	return nil
 }

@@ -54,6 +54,10 @@ func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version str
 
 // Start begins listening and accepting connections.
 func (s *Server) Start() error {
+	if err := ensurePrivateSocketDir(s.sockPath); err != nil {
+		return err
+	}
+
 	// Check for stale socket
 	if err := cleanStaleSocket(s.sockPath); err != nil {
 		return err

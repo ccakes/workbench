@@ -4,13 +4,16 @@
 
 ## Socket Path
 
-The socket path is derived deterministically from the config file's absolute path:
+The socket path is derived deterministically from the config file's absolute
+path and placed in a per-user private temp directory:
 
 ```
-SHA256(abs_config_path)[:8] → /tmp/bench-<hash>.sock
+SHA256(abs_config_path)[:8] → $TMPDIR/bench-<uid>/bench-<hash>.sock
 ```
 
 This means `bench status` auto-discovers the running instance when using the same config file.
+The auto-created socket directory is chmod `0700` so other local users cannot
+open the control socket.
 
 Override the socket path with:
 - `--socket <path>` flag on any subcommand

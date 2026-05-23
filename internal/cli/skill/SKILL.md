@@ -22,7 +22,7 @@ This skill was generated for `bench` version **{{BENCH_VERSION}}**. Before
 acting on anything below, run:
 
 ```bash
-bench --version
+bench version
 ```
 
 If the version printed differs from `{{BENCH_VERSION}}` above, the skill is

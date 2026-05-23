@@ -152,6 +152,30 @@ func TestApplyProfileFilter(t *testing.T) {
 	}
 }
 
+func TestContainerNamesWithPrefix(t *testing.T) {
+	got := containerNamesWithPrefix("benchproj", `
+benchproj-api
+other-benchproj-api
+benchproj-worker
+benchproj
+`)
+	want := []string{"benchproj-api", "benchproj-worker"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("containerNamesWithPrefix got %v, want %v", got, want)
+	}
+}
+
+func TestValidContainerPrefixRejectsUnsafeValues(t *testing.T) {
+	for _, prefix := range []string{"../oops", "name with spaces", "foo.*"} {
+		if validContainerPrefix.MatchString(prefix) {
+			t.Fatalf("expected prefix %q to be rejected", prefix)
+		}
+	}
+	if !validContainerPrefix.MatchString("bench_proj-1") {
+		t.Fatal("expected alphanumeric underscore hyphen prefix to be accepted")
+	}
+}
+
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	t.Helper()
 

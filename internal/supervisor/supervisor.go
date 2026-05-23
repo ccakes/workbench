@@ -44,12 +44,11 @@ type managedService struct {
 	running bool // whether the run loop is active
 	mu      sync.Mutex
 
-	// setupErr is set by the probe/setup goroutine when the setup hook fails.
-	// The run loop's stop path checks this to surface Failed (with the setup
-	// error) instead of the usual Stopped, since the cause is internal — the
-	// service was killed because its bootstrap failed, not because the user
-	// stopped it.
-	setupErr string
+	// startupErr is set by the probe/setup goroutine when readiness or setup
+	// fails. The run loop's stop path checks this to surface Failed instead of
+	// the usual Stopped, since the service was killed by its own bootstrap
+	// failure rather than an operator stop.
+	startupErr string
 }
 
 func New(cfg *config.Config, bus *events.Bus) *Supervisor {
@@ -63,22 +62,8 @@ func New(cfg *config.Config, bus *events.Bus) *Supervisor {
 	}
 
 	for key, svcCfg := range cfg.Services {
-		displayName := svcCfg.Name
-		if displayName == "" {
-			displayName = key
-		}
-		info := service.NewInfo(key, displayName)
-		info.WatchEnabled = svcCfg.Watch.IsEnabled()
-		if !svcCfg.GetAutoStart() {
-			info.Status = service.StatusDisabled
-		}
-		if svcCfg.IsContainer() {
-			info.ServiceType = "container"
-			info.Image = svcCfg.Container.Image
-			info.Ports = svcCfg.Container.Ports
-		} else {
-			info.ServiceType = "process"
-		}
+		info := service.NewInfo(key, displayName(key, svcCfg))
+		applyServiceMetadata(info, key, svcCfg, false)
 
 		s.services[key] = &managedService{
 			info:      info,
@@ -91,6 +76,33 @@ func New(cfg *config.Config, bus *events.Bus) *Supervisor {
 		}
 	}
 	return s
+}
+
+func displayName(key string, svcCfg config.ServiceConfig) string {
+	if svcCfg.Name != "" {
+		return svcCfg.Name
+	}
+	return key
+}
+
+func applyServiceMetadata(info *service.Info, key string, svcCfg config.ServiceConfig, preserveStatus bool) {
+	info.Lock()
+	defer info.Unlock()
+
+	info.DisplayName = displayName(key, svcCfg)
+	info.WatchEnabled = svcCfg.Watch.IsEnabled()
+	if svcCfg.IsContainer() {
+		info.ServiceType = "container"
+		info.Image = svcCfg.Container.Image
+		info.Ports = append([]string(nil), svcCfg.Container.Ports...)
+	} else {
+		info.ServiceType = "process"
+		info.Image = ""
+		info.Ports = nil
+	}
+	if !preserveStatus && !svcCfg.GetAutoStart() {
+		info.Status = service.StatusDisabled
+	}
 }
 
 // Start launches all auto_start services in dependency order.
@@ -307,6 +319,9 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		}
 
 		s.setStatus(ms, service.StatusStarting, "")
+		ms.mu.Lock()
+		ms.startupErr = ""
+		ms.mu.Unlock()
 
 		// Create a fresh runner for each attempt
 		if ms.cfg.IsContainer() {
@@ -373,17 +388,26 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		}
 		probeWG.Go(func() {
 			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline) {
+				if probeCtx.Err() == nil {
+					ms.mu.Lock()
+					ms.startupErr = readinessFailureReason(ms.cfg.Readiness)
+					ms.mu.Unlock()
+					select {
+					case ms.stopCh <- struct{}{}:
+					default:
+					}
+				}
 				return
 			}
 			if ms.cfg.Setup != nil {
 				s.setStatus(ms, service.StatusSetup, "running setup hook")
 				if err := s.runSetupHook(probeCtx, ms); err != nil {
 					// Record the failure on the managed service. The runLoop's
-					// stop path sees setupErr and finalises as Failed (not
+					// stop path sees startupErr and finalises as Failed (not
 					// Stopped) so the user can tell apart "I stopped this"
 					// from "its bootstrap exploded".
 					ms.mu.Lock()
-					ms.setupErr = fmt.Sprintf("setup hook: %v", err)
+					ms.startupErr = fmt.Sprintf("setup hook: %v", err)
 					ms.mu.Unlock()
 					select {
 					case ms.stopCh <- struct{}{}:
@@ -441,8 +465,8 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		case <-ms.stopCh:
 			stopProbe()
 			ms.mu.Lock()
-			setupErr := ms.setupErr
-			ms.setupErr = ""
+			startupErr := ms.startupErr
+			ms.startupErr = ""
 			ms.mu.Unlock()
 
 			s.setStatus(ms, service.StatusStopping, "stopping")
@@ -452,10 +476,10 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			ms.info.ContainerID = ""
 			ms.info.StopTime = time.Now()
 			ms.info.Unlock()
-			if setupErr != "" {
-				// Internal stop: setup hook failed. Surface Failed with the
+			if startupErr != "" {
+				// Internal stop: readiness/setup failed. Surface Failed with the
 				// real cause so dependents cascade and the user sees why.
-				s.setStatus(ms, service.StatusFailed, setupErr)
+				s.setStatus(ms, service.StatusFailed, startupErr)
 			} else {
 				s.setStatus(ms, service.StatusStopped, "stopped")
 			}
@@ -487,6 +511,16 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			return
 		}
 	}
+}
+
+func readinessFailureReason(cfg config.ReadinessConfig) string {
+	if cfg.MaxAttempts > 0 {
+		return fmt.Sprintf("readiness probe failed after %d attempts", cfg.MaxAttempts)
+	}
+	if cfg.Kind != "" && cfg.Kind != "none" {
+		return "readiness probe failed"
+	}
+	return "readiness failed"
 }
 
 // depSatisfied reports whether a dep's current status satisfies this

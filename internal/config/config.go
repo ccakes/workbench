@@ -412,8 +412,8 @@ func resolveRelativePaths(cfg *Config, baseDir string) {
 		if svc.Dir != "" && !filepath.IsAbs(svc.Dir) {
 			svc.Dir = filepath.Join(baseDir, svc.Dir)
 		}
-		if svc.EnvFile != "" && !filepath.IsAbs(svc.EnvFile) {
-			svc.EnvFile = filepath.Join(baseDir, svc.EnvFile)
+		if svc.EnvFile != "" {
+			svc.EnvFile = resolveEnvFilePath(svc.EnvFile, baseDir)
 		}
 		if svc.Container != nil {
 			for i, v := range svc.Container.Volumes {
@@ -427,9 +427,17 @@ func resolveRelativePaths(cfg *Config, baseDir string) {
 		}
 		cfg.Services[key] = svc
 	}
-	if cfg.Global.EnvFile != "" && !filepath.IsAbs(cfg.Global.EnvFile) {
-		cfg.Global.EnvFile = filepath.Join(baseDir, cfg.Global.EnvFile)
+	if cfg.Global.EnvFile != "" {
+		cfg.Global.EnvFile = resolveEnvFilePath(cfg.Global.EnvFile, baseDir)
 	}
+}
+
+func resolveEnvFilePath(path, baseDir string) string {
+	path = os.ExpandEnv(path)
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(baseDir, path)
 }
 
 func loadWithStack(absPath string, stack []string) (*Config, error) {

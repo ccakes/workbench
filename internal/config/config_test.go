@@ -2261,6 +2261,7 @@ services:
 func TestExpandEnvInConfig(t *testing.T) {
 	t.Setenv("BENCH_TEST_DB_PASS", "s3cret")
 	t.Setenv("BENCH_TEST_TOKEN", "abc")
+	t.Setenv("BENCH_TEST_HOME", t.TempDir())
 	tmp := t.TempDir()
 
 	dir := tmp + "/svc"
@@ -2271,12 +2272,14 @@ func TestExpandEnvInConfig(t *testing.T) {
 	yaml := `
 version: 1
 global:
+  env_file: "$BENCH_TEST_HOME/global.env"
   env:
     GLOBAL_VAR: "g-${BENCH_TEST_TOKEN}"
 services:
   api:
     dir: svc
     command: "echo $LITERAL"
+    env_file: "$BENCH_TEST_HOME/service.env"
     env:
       DB_PASS: "${BENCH_TEST_DB_PASS}"
       LITERAL: "no-expansion-here-$$"
@@ -2295,6 +2298,12 @@ services:
 	}
 	if got := cfg.Global.Env["GLOBAL_VAR"]; got != "g-abc" {
 		t.Errorf("GLOBAL_VAR = %q, want g-abc", got)
+	}
+	if got, want := cfg.Global.EnvFile, filepath.Join(os.Getenv("BENCH_TEST_HOME"), "global.env"); got != want {
+		t.Errorf("global env_file = %q, want %q", got, want)
+	}
+	if got, want := cfg.Services["api"].EnvFile, filepath.Join(os.Getenv("BENCH_TEST_HOME"), "service.env"); got != want {
+		t.Errorf("service env_file = %q, want %q", got, want)
 	}
 	// Command was NOT expanded — the literal $LITERAL stays.
 	if got := cfg.Services["api"].Command.Parts[2]; got != "echo $LITERAL" {
