@@ -140,7 +140,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "j", "down":
 		if m.activePane == paneList {
-			if m.selected < len(m.services)-1 {
+			if m.selected < len(m.displayOrder())-1 {
 				m.selected++
 				m.logOffset = 0
 				m.logFollow = true
@@ -275,10 +275,54 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) selectedKey() string {
-	if m.selected >= 0 && m.selected < len(m.services) {
-		return m.services[m.selected]
+	order := m.displayOrder()
+	if m.selected >= 0 && m.selected < len(order) {
+		return order[m.selected]
 	}
 	return ""
+}
+
+// displayOrder returns service keys in the order they appear in the rendered
+// service list. When at least one service has a `group:` set, groups are
+// listed alphabetically with ungrouped services collected under "Other" at
+// the bottom; otherwise the supervisor's start order is preserved.
+func (m Model) displayOrder() []string {
+	useGroups := false
+	for _, key := range m.services {
+		if cfg := m.sup.ServiceConfig(key); cfg != nil && cfg.Group != "" {
+			useGroups = true
+			break
+		}
+	}
+	if !useGroups {
+		return m.services
+	}
+
+	grouped := make(map[string][]string)
+	var groupOrder []string
+	var ungrouped []string
+	for _, key := range m.services {
+		var groupName string
+		if cfg := m.sup.ServiceConfig(key); cfg != nil {
+			groupName = cfg.Group
+		}
+		if groupName == "" {
+			ungrouped = append(ungrouped, key)
+			continue
+		}
+		if _, seen := grouped[groupName]; !seen {
+			groupOrder = append(groupOrder, groupName)
+		}
+		grouped[groupName] = append(grouped[groupName], key)
+	}
+	sortStrings(groupOrder)
+
+	out := make([]string, 0, len(m.services))
+	for _, g := range groupOrder {
+		out = append(out, grouped[g]...)
+	}
+	out = append(out, ungrouped...)
+	return out
 }
 
 func (m Model) View() string {
@@ -362,11 +406,12 @@ func (m Model) viewServiceList(width, height int) string {
 	b.WriteString(styleTitle.Render("Services"))
 	b.WriteString("\n")
 
-	// Decide whether to render group headers. We only inject them when at
-	// least one service has a `group:` field set — otherwise the list looks
-	// like it did before for the no-config-change case.
+	order := m.displayOrder()
+
+	// Group headers are only rendered when at least one service has a
+	// `group:` field set — otherwise the list looks like it did before.
 	useGroups := false
-	for _, key := range m.services {
+	for _, key := range order {
 		if cfg := m.sup.ServiceConfig(key); cfg != nil && cfg.Group != "" {
 			useGroups = true
 			break
@@ -427,7 +472,7 @@ func (m Model) viewServiceList(width, height int) string {
 	}
 
 	if !useGroups {
-		for i, key := range m.services {
+		for i, key := range order {
 			if !emitService(i, key) {
 				break
 			}
@@ -435,48 +480,28 @@ func (m Model) viewServiceList(width, height int) string {
 		return strings.TrimRight(b.String(), "\n")
 	}
 
-	// Group services preserving original index for selection mapping.
-	type entry struct {
-		i   int
-		key string
-	}
-	grouped := make(map[string][]entry)
-	var groupOrder []string
-	var ungrouped []entry
-	for i, key := range m.services {
+	var lastGroup string
+	ungroupedHeaderEmitted := false
+	for i, key := range order {
 		var groupName string
 		if cfg := m.sup.ServiceConfig(key); cfg != nil {
 			groupName = cfg.Group
 		}
 		if groupName == "" {
-			ungrouped = append(ungrouped, entry{i, key})
-			continue
-		}
-		if _, seen := grouped[groupName]; !seen {
-			groupOrder = append(groupOrder, groupName)
-		}
-		grouped[groupName] = append(grouped[groupName], entry{i, key})
-	}
-	sortStrings(groupOrder)
-
-	for _, g := range groupOrder {
-		if !emitGroupHeader(g) {
-			return strings.TrimRight(b.String(), "\n")
-		}
-		for _, e := range grouped[g] {
-			if !emitService(e.i, e.key) {
+			if !ungroupedHeaderEmitted {
+				if !emitGroupHeader("Other") {
+					return strings.TrimRight(b.String(), "\n")
+				}
+				ungroupedHeaderEmitted = true
+			}
+		} else if groupName != lastGroup {
+			if !emitGroupHeader(groupName) {
 				return strings.TrimRight(b.String(), "\n")
 			}
+			lastGroup = groupName
 		}
-	}
-	if len(ungrouped) > 0 {
-		if !emitGroupHeader("Other") {
+		if !emitService(i, key) {
 			return strings.TrimRight(b.String(), "\n")
-		}
-		for _, e := range ungrouped {
-			if !emitService(e.i, e.key) {
-				return strings.TrimRight(b.String(), "\n")
-			}
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")

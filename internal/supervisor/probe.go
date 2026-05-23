@@ -190,7 +190,7 @@ func probeHTTPOnce(ctx context.Context, url string, perAttemptTimeout time.Durat
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
@@ -205,8 +205,8 @@ func probeExecOnce(ctx context.Context, parts []string, perAttemptTimeout time.D
 		cmd.Stderr = errW
 		go streamProbeLines(outR, logs, "probe")
 		go streamProbeLines(errR, logs, "probe")
-		defer outW.Close()
-		defer errW.Close()
+		defer func() { _ = outW.Close() }()
+		defer func() { _ = errW.Close() }()
 	}
 	err := cmd.Run()
 	return err == nil
@@ -235,7 +235,7 @@ func probeGRPCOnce(ctx context.Context, addr, service string, perAttemptTimeout 
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := healthpb.NewHealthClient(conn)
 	resp, err := client.Check(attemptCtx, &healthpb.HealthCheckRequest{Service: service})
