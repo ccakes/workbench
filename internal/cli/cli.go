@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,43 +34,86 @@ var validContainerPrefix = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 var Version = "dev"
 
 func Run() int {
-	if len(os.Args) < 2 {
-		return runUp(os.Args[1:])
+	args := os.Args[1:]
+
+	// Global flags may appear before the subcommand (e.g. `bench --config FILE
+	// up`). Parse them here with a FlagSet so adding a new global is a single
+	// fs.*Var call; the parsed tokens are then forwarded to the subcommand
+	// handler, which defines and re-parses the same flags. This keeps both
+	// `bench --config FILE up` and `bench up --config FILE` working.
+	fs := flag.NewFlagSet("bench", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var (
+		discardStr  string
+		helpFlag    bool
+		hFlag       bool
+		versionFlag bool
+	)
+	fs.StringVar(&discardStr, "config", "", "")
+	fs.StringVar(&discardStr, "socket", "", "")
+	fs.BoolVar(&helpFlag, "help", false, "")
+	fs.BoolVar(&hFlag, "h", false, "")
+	fs.BoolVar(&versionFlag, "version", false, "")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
+		printUsage()
+		return 2
 	}
 
-	switch os.Args[1] {
+	if helpFlag || hFlag {
+		printUsage()
+		return 0
+	}
+	if versionFlag {
+		fmt.Printf("bench %s\n", Version)
+		return 0
+	}
+
+	rest := fs.Args()
+	leading := args[:len(args)-len(rest)]
+
+	if len(rest) == 0 {
+		return runUp(leading)
+	}
+
+	cmd := rest[0]
+	forward := append([]string{}, leading...)
+	forward = append(forward, rest[1:]...)
+
+	switch cmd {
 	case "up":
-		return runUp(os.Args[2:])
+		return runUp(forward)
 	case "start":
-		return runStart(os.Args[2:])
+		return runStart(forward)
 	case "stop":
-		return runStop(os.Args[2:])
+		return runStop(forward)
 	case "restart":
-		return runRestart(os.Args[2:])
+		return runRestart(forward)
 	case "status":
-		return runStatus(os.Args[2:])
+		return runStatus(forward)
 	case "logs":
-		return runLogs(os.Args[2:])
+		return runLogs(forward)
 	case "wait":
-		return runWait(os.Args[2:])
+		return runWait(forward)
 	case "clean":
-		return runClean(os.Args[2:])
+		return runClean(forward)
 	case "reload":
-		return runReload(os.Args[2:])
+		return runReload(forward)
 	case "validate":
-		return runValidate(os.Args[2:])
+		return runValidate(forward)
 	case "import-compose":
-		return runImportCompose(os.Args[2:])
+		return runImportCompose(forward)
 	case "agent-skill":
-		return runAgentSkill(os.Args[2:])
+		return runAgentSkill(forward)
 	case "version":
 		fmt.Printf("bench %s\n", Version)
 		return 0
-	case "help", "-h", "--help":
+	case "help":
 		printUsage()
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
 		printUsage()
 		return 1
 	}
