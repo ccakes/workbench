@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-05-28
+
+### Fixed
+
+- Global flags (`--config`, `--socket`) now work when placed before the
+  subcommand — e.g. `bench --config FILE logs --follow`. Previously only the
+  trailing form (`bench logs --config FILE`) was accepted; the leading form
+  failed with "unknown command: --config".
+- `${VAR}` interpolation in inline `env:` values now sees keys defined in
+  `global.env_file` (and per-service `env_file`). Previously the
+  substitution source was only the parent shell, so a reference like
+  `DATABASE_URL: "postgres://${MEGADB_USER}@..."` expanded to an empty
+  user even when `MEGADB_USER` was set in the env_file — and the empty
+  inline value then clobbered the env_file value at service start, since
+  inline env wins last in `supervisor.buildEnv`. Interpolation now falls
+  back from shell env to same-scope inline env, service env_file, global
+  inline env, and global env_file.
+
 ## [0.6.0] - 2026-05-23
 
 ### Added
