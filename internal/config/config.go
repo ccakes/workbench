@@ -345,30 +345,141 @@ func Load(path string) (*Config, error) {
 }
 
 // expandEnvInConfig rewrites `${VAR}` and `$VAR` references found in env and
-// env_file fields against the parent process's environment. Other string
-// fields (commands, regexes, URLs) are intentionally untouched — `$` is
-// common in log_pattern regexes, and expanding it there would surprise
-// users far more than the convenience would help.
+// env_file fields. Other string fields (commands, regexes, URLs) are
+// intentionally untouched — `$` is common in log_pattern regexes, and
+// expanding it there would surprise users far more than the convenience
+// would help.
+//
+// The substitution source for service inline env values is resolved in
+// priority order: shell env, then other values from the same service env, then
+// service env_file, then global env, then global env_file. Without env-file
+// fallbacks, `${VAR}` in an inline env value would expand to empty whenever
+// VAR was defined only in an env_file, then clobber the env_file value at
+// runtime (inline env wins last in buildEnv).
+//
+// env_file *path* fields are still expanded against the shell env only —
+// the file's own contents can't be a source for its own path.
 func expandEnvInConfig(cfg *Config) {
 	if cfg.Global.EnvFile != "" {
 		cfg.Global.EnvFile = os.ExpandEnv(cfg.Global.EnvFile)
 	}
-	for k, v := range cfg.Global.Env {
-		cfg.Global.Env[k] = os.ExpandEnv(v)
-	}
 	for key, svc := range cfg.Services {
 		if svc.EnvFile != "" {
 			svc.EnvFile = os.ExpandEnv(svc.EnvFile)
+			cfg.Services[key] = svc
 		}
-		if len(svc.Env) > 0 {
-			expanded := make(map[string]string, len(svc.Env))
-			for k, v := range svc.Env {
-				expanded[k] = os.ExpandEnv(v)
+	}
+
+	// A missing/unreadable env_file is reported by validate(); skip silently
+	// here so config loading still succeeds for non-env-related uses (e.g.
+	// `bench validate` diagnostics).
+	shellEnv := osEnvMap()
+	globalFileEnv := map[string]string{}
+	if cfg.Global.EnvFile != "" {
+		if fileEnv, err := LoadEnvFile(cfg.Global.EnvFile); err == nil {
+			overlayPairs(globalFileEnv, fileEnv)
+		}
+	}
+
+	// Global inline env expands against shell, other global inline env values,
+	// then the global env_file.
+	cfg.Global.Env = expandEnvMap(cfg.Global.Env, []map[string]string{shellEnv}, []map[string]string{globalFileEnv})
+
+	// Service inline env expands against shell, other service inline env
+	// values, service env_file, global inline env, then global env_file.
+	for key, svc := range cfg.Services {
+		if len(svc.Env) == 0 {
+			continue
+		}
+		serviceFileEnv := map[string]string{}
+		if svc.EnvFile != "" {
+			if fileEnv, err := LoadEnvFile(svc.EnvFile); err == nil {
+				overlayPairs(serviceFileEnv, fileEnv)
 			}
-			svc.Env = expanded
 		}
+		svc.Env = expandEnvMap(
+			svc.Env,
+			[]map[string]string{shellEnv},
+			[]map[string]string{serviceFileEnv, cfg.Global.Env, globalFileEnv},
+		)
 		cfg.Services[key] = svc
 	}
+}
+
+func osEnvMap() map[string]string {
+	pairs := os.Environ()
+	m := make(map[string]string, len(pairs))
+	overlayPairs(m, pairs)
+	return m
+}
+
+func overlayPairs(dst map[string]string, pairs []string) {
+	for _, p := range pairs {
+		if idx := indexByte(p, '='); idx > 0 {
+			dst[p[:idx]] = p[idx+1:]
+		}
+	}
+}
+
+func expandEnvMap(values map[string]string, higher, lower []map[string]string) map[string]string {
+	if len(values) == 0 {
+		return values
+	}
+	expanded := make(map[string]string, len(values))
+	resolving := make(map[string]bool, len(values))
+
+	var expandKey func(string) string
+	expandKey = func(key string) string {
+		if v, ok := expanded[key]; ok {
+			return v
+		}
+		raw, ok := values[key]
+		if !ok {
+			return ""
+		}
+		if resolving[key] {
+			if v, ok := lookupMaps(key, lower); ok {
+				return v
+			}
+			return ""
+		}
+		resolving[key] = true
+		v := os.Expand(raw, func(ref string) string {
+			if v, ok := lookupMaps(ref, higher); ok {
+				return v
+			}
+			if _, ok := values[ref]; ok {
+				if ref == key || resolving[ref] {
+					if v, ok := lookupMaps(ref, lower); ok {
+						return v
+					}
+					return ""
+				}
+				return expandKey(ref)
+			}
+			if v, ok := lookupMaps(ref, lower); ok {
+				return v
+			}
+			return ""
+		})
+		delete(resolving, key)
+		expanded[key] = v
+		return v
+	}
+
+	for key := range values {
+		expanded[key] = expandKey(key)
+	}
+	return expanded
+}
+
+func lookupMaps(key string, maps []map[string]string) (string, bool) {
+	for _, m := range maps {
+		if v, ok := m[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // Parse parses YAML config data for a single file. Relative paths are resolved

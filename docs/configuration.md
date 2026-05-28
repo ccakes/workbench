@@ -10,8 +10,7 @@ workbench uses a YAML configuration file, by default `bench.yml` in the current 
 
 ## Environment variable interpolation
 
-`${VAR}` and `$VAR` references are expanded against the parent process's
-environment, but **only** in the following fields:
+`${VAR}` and `$VAR` references are expanded **only** in the following fields:
 
 - `global.env.*` values
 - `global.env_file` path
@@ -23,17 +22,42 @@ Other string fields (`command`, `readiness.pattern`, `readiness.url`,
 commands and regex patterns and expanding it would surprise users far more
 than it helps.
 
+For inline `env.*` values, variable lookup is resolved separately from final
+runtime env loading. Higher-priority sources win. For service inline `env`
+values, lookup uses this priority order:
+
+1. Parent shell environment
+2. Other values in that service's inline `env`
+3. That service's `env_file`
+4. `global.env`
+5. `global.env_file`
+
+Put another way, the service-level fallback chain is:
+shell env → service `env` → service `env_file` → `global.env_file`, with
+`global.env` also participating just before `global.env_file` when configured.
+
+For `global.env` values, lookup uses the parent shell environment first, then
+other `global.env` values, then `global.env_file`.
+
+This means a value defined in `global.env_file` is visible to `${VAR}`
+references in any service's inline env — you do not need to source the .env
+file into your shell first — but a value exported in your shell overrides the
+same key from config or env files.
+
+For `env_file` *path* fields, only the parent shell environment is consulted
+(the file's own contents can't resolve its own path).
+
 ```yaml
 services:
   api:
     env:
-      DB_PASS: ${DATABASE_PASSWORD}      # expanded
-      TOKEN_PREFIX: "tok-${ENVIRONMENT}" # expanded
+      DB_PASS: ${DATABASE_PASSWORD}      # shell wins, then service/global env files
+      TOKEN_PREFIX: "tok-${ENVIRONMENT}" # can refer to another inline env key
     command: "./bin/api --pw $DB_PASS"   # NOT expanded; runs through the shell
 ```
 
-If a referenced variable is unset, it expands to the empty string (matching
-Go's `os.ExpandEnv`).
+If a referenced variable is unset in every layer, it expands to the empty
+string (matching Go's `os.ExpandEnv`).
 
 ## Strict field validation
 

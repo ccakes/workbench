@@ -90,6 +90,8 @@ common stuff, not an exhaustive reference.
 - File watchers may auto-restart services on code changes (`watch_enabled`
   field in status); when set, manual `bench restart` is rarely needed.
 - `${VAR}` is expanded only inside `env:` and `env_file:` values — not in
-  commands or readiness fields.
+  commands or readiness fields. Service inline env lookup prefers shell env,
+  then same-service `env`, service `env_file`, `global.env`, and
+  `global.env_file`.
 - `profiles: [name]` per service + `bench up --profile <name>` to filter
   what gets started. Services without profiles are always-on.

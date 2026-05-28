@@ -2311,6 +2311,199 @@ services:
 	}
 }
 
+// TestExpandEnvInConfig_FromEnvFile covers the regression where inline
+// `${VAR}` references resolved to empty whenever VAR was defined only in a
+// global env_file (and not in the parent shell). At runtime
+// supervisor.buildEnv layers inline env on top of env_file, so the empty
+// interpolation would silently clobber the env_file value.
+func TestExpandEnvInConfig_FromEnvFile(t *testing.T) {
+	tmp := t.TempDir()
+	envPath := filepath.Join(tmp, ".env")
+	if err := os.WriteFile(envPath, []byte("MEGADB_USER=megadb_admin\nMEGADB_PASS=s3cret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, "bench.yml")
+	yaml := `
+version: 1
+global:
+  env_file: .env
+services:
+  api:
+    command: "echo hi"
+    env:
+      DATABASE_URL: "postgres://${MEGADB_USER}:${MEGADB_PASS}@localhost/db"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Explicitly clear the vars from the parent env to prove the env_file is
+	// the only source.
+	t.Setenv("MEGADB_USER", "")
+	t.Setenv("MEGADB_PASS", "")
+	if err := os.Unsetenv("MEGADB_USER"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv("MEGADB_PASS"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := cfg.Services["api"].Env["DATABASE_URL"]
+	want := "postgres://megadb_admin:s3cret@localhost/db"
+	if got != want {
+		t.Errorf("DATABASE_URL = %q, want %q", got, want)
+	}
+}
+
+// TestExpandEnvInConfig_ServiceEnvFile covers per-service env_file values
+// feeding into the substitution source for that service's inline env.
+func TestExpandEnvInConfig_ServiceEnvFile(t *testing.T) {
+	tmp := t.TempDir()
+	svcEnv := filepath.Join(tmp, "svc.env")
+	if err := os.WriteFile(svcEnv, []byte("TOKEN=svc-token\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, "bench.yml")
+	yaml := `
+version: 1
+services:
+  api:
+    command: "echo hi"
+    env_file: svc.env
+    env:
+      AUTHORIZATION: "Bearer ${TOKEN}"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TOKEN", "")
+	if err := os.Unsetenv("TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Services["api"].Env["AUTHORIZATION"]; got != "Bearer svc-token" {
+		t.Errorf("AUTHORIZATION = %q, want %q", got, "Bearer svc-token")
+	}
+}
+
+// TestExpandEnvInConfig_Precedence pins the interpolation lookup order:
+// shell env -> service env -> service env_file -> global env -> global
+// env_file. Runtime env loading has its own final-value precedence; this test
+// covers what `${VAR}` references see while config is loaded.
+func TestExpandEnvInConfig_Precedence(t *testing.T) {
+	tmp := t.TempDir()
+	globalEnv := filepath.Join(tmp, ".env")
+	if err := os.WriteFile(globalEnv, []byte(strings.Join([]string{
+		"BENCH_PRECEDENCE_SHELL=from-global-file",
+		"BENCH_PRECEDENCE_SERVICE=from-global-file",
+		"BENCH_PRECEDENCE_SERVICE_FILE=from-global-file",
+		"BENCH_PRECEDENCE_GLOBAL=from-global-file",
+		"BENCH_PRECEDENCE_GLOBAL_FILE=from-global-file",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serviceEnv := filepath.Join(tmp, "svc.env")
+	if err := os.WriteFile(serviceEnv, []byte(strings.Join([]string{
+		"BENCH_PRECEDENCE_SERVICE=from-service-file",
+		"BENCH_PRECEDENCE_SERVICE_FILE=from-service-file",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, "bench.yml")
+	yaml := `
+version: 1
+global:
+  env_file: .env
+  env:
+    BENCH_PRECEDENCE_GLOBAL: from-global-env
+services:
+  api:
+    command: "echo hi"
+    env_file: svc.env
+    env:
+      BENCH_PRECEDENCE_SERVICE: from-service-env
+      OUT_SHELL: "${BENCH_PRECEDENCE_SHELL}"
+      OUT_SERVICE: "${BENCH_PRECEDENCE_SERVICE}"
+      OUT_SERVICE_FILE: "${BENCH_PRECEDENCE_SERVICE_FILE}"
+      OUT_GLOBAL: "${BENCH_PRECEDENCE_GLOBAL}"
+      OUT_GLOBAL_FILE: "${BENCH_PRECEDENCE_GLOBAL_FILE}"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BENCH_PRECEDENCE_SHELL", "from-shell")
+	for _, key := range []string{
+		"BENCH_PRECEDENCE_SERVICE",
+		"BENCH_PRECEDENCE_SERVICE_FILE",
+		"BENCH_PRECEDENCE_GLOBAL",
+		"BENCH_PRECEDENCE_GLOBAL_FILE",
+	} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	env := cfg.Services["api"].Env
+	assertEnv := func(key, want string) {
+		t.Helper()
+		if got := env[key]; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	assertEnv("OUT_SHELL", "from-shell")
+	assertEnv("OUT_SERVICE", "from-service-env")
+	assertEnv("OUT_SERVICE_FILE", "from-service-file")
+	assertEnv("OUT_GLOBAL", "from-global-env")
+	assertEnv("OUT_GLOBAL_FILE", "from-global-file")
+}
+
+// TestExpandEnvInConfig_ShellOverridesEnvFile pins the precedence order:
+// a value present in the parent shell environment wins over the same key
+// defined in an env_file. Without this, sourcing a fresh value into the
+// shell wouldn't take effect until the env_file was edited.
+func TestExpandEnvInConfig_ShellOverridesEnvFile(t *testing.T) {
+	tmp := t.TempDir()
+	envPath := filepath.Join(tmp, ".env")
+	if err := os.WriteFile(envPath, []byte("PRIORITY=from-file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, "bench.yml")
+	yaml := `
+version: 1
+global:
+  env_file: .env
+services:
+  api:
+    command: "echo hi"
+    env:
+      PRIORITY_OUT: "${PRIORITY}"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PRIORITY", "from-shell")
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Services["api"].Env["PRIORITY_OUT"]; got != "from-shell" {
+		t.Errorf("PRIORITY_OUT = %q, want %q", got, "from-shell")
+	}
+}
+
 func TestTransitiveDeps(t *testing.T) {
 	cfg := &Config{
 		Services: map[string]ServiceConfig{

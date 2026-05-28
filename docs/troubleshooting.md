@@ -49,7 +49,14 @@ global:
 
 ### Environment variables not loading
 
-Env vars are loaded in order: system env → global env_file → service env_file → service env (inline). Later values override earlier ones.
+Env vars are loaded at runtime in order: system env → global env_file →
+global env (inline) → service env_file → service env (inline). Later values
+override earlier ones.
+
+Inline `env` interpolation uses a different lookup order while config is loaded:
+shell env → same-scope inline env → service env_file → global env →
+global env_file.
+See `docs/configuration.md` for the full rules.
 
 Check:
 - The `env_file` path is correct (relative to the config file location)
