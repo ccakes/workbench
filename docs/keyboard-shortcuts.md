@@ -4,11 +4,20 @@
 
 | Key | Action |
 |-----|--------|
-| `j` / `Down` | Move selection down (list pane) or scroll logs down |
-| `k` / `Up` | Move selection up (list pane) or scroll logs up |
+| `j` / `Down` | Move selection down (list pane) or scroll logs down toward newest |
+| `k` / `Up` | Move selection up (list pane) or scroll logs up toward oldest |
+| `h` / `Left` | Scroll the log pane left (for lines wider than the pane) |
+| `l` / `Right` | Scroll the log pane right |
+| `Ctrl+D` / `PageDown` | Scroll logs down one page |
+| `Ctrl+U` / `PageUp` | Scroll logs up one page |
 | `Tab` | Switch between service list and log pane |
 | `g` | Scroll to top of logs |
 | `G` | Scroll to bottom of logs (re-enables follow) |
+
+Vertical scrolling clamps at the top and bottom; reaching the bottom re-enables
+follow mode. Horizontal scrolling lets you read log lines that are wider than the
+pane instead of having them truncated, and clamps so the longest visible line's
+right edge stops at the pane edge.
 
 ## Service Control
 

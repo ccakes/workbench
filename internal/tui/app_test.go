@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ccakes/workbench/internal/config"
@@ -85,6 +87,116 @@ func TestViewLineWidths(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// pressKey feeds a single rune key through handleKey and returns the updated model.
+func pressKey(t *testing.T, m Model, key string) Model {
+	t.Helper()
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return updated.(Model)
+}
+
+// TestLogScroll exercises four-direction log-pane scrolling: j/k scroll
+// down/up the vim way and clamp at both ends, h/l pan horizontally through
+// wide lines and clamp, and rendered lines never exceed the pane width.
+func TestLogScroll(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Version: 1,
+		Global: config.GlobalConfig{
+			ShutdownTimeout: config.Duration{Duration: 1 * time.Second},
+			LogBufferLines:  500,
+		},
+		Services: map[string]config.ServiceConfig{
+			"svc": {
+				Dir:     dir,
+				Command: &config.Command{Shell: true, Parts: []string{"sh", "-c", "echo hi"}},
+				Restart: config.RestartConfig{Policy: "never"},
+			},
+		},
+	}
+
+	bus := events.NewBus()
+	sup := supervisor.New(cfg, bus)
+	m := NewModel(sup, nil)
+
+	// Seed many lines, each far wider than the pane.
+	logs := sup.ServiceLogs("svc")
+	for i := 0; i < 100; i++ {
+		logs.Add("stdout", fmt.Sprintf("line %03d: %s", i, strings.Repeat("x", 120)))
+	}
+
+	m.width = 80
+	m.height = 24
+	m.selected = 0
+	m.activePane = paneLogs
+	m.logOffset = 0
+	m.logOffsetX = 0
+	m.logFollow = true
+
+	maxOffset, maxX := m.logScrollBounds()
+	if maxOffset <= 0 {
+		t.Fatalf("expected a positive maxOffset with 100 seeded lines, got %d", maxOffset)
+	}
+	if maxX <= 0 {
+		t.Fatalf("expected a positive maxX with wide lines, got %d", maxX)
+	}
+
+	// k scrolls up (toward oldest) and disables follow.
+	m = pressKey(t, m, "k")
+	if m.logOffset != 1 {
+		t.Errorf("after one k: logOffset = %d, want 1", m.logOffset)
+	}
+	if m.logFollow {
+		t.Error("after k: logFollow should be false")
+	}
+
+	// k clamps at maxOffset no matter how far we push.
+	for i := 0; i < 200; i++ {
+		m = pressKey(t, m, "k")
+	}
+	if m.logOffset != maxOffset {
+		t.Errorf("k clamp: logOffset = %d, want maxOffset %d", m.logOffset, maxOffset)
+	}
+
+	// j scrolls back down to the bottom and re-enables follow.
+	for i := 0; i < 200; i++ {
+		m = pressKey(t, m, "j")
+	}
+	if m.logOffset != 0 {
+		t.Errorf("j clamp: logOffset = %d, want 0", m.logOffset)
+	}
+	if !m.logFollow {
+		t.Error("after scrolling to bottom: logFollow should be true")
+	}
+
+	// l pans right and clamps at maxX.
+	m = pressKey(t, m, "l")
+	if m.logOffsetX != logScrollStepX {
+		t.Errorf("after one l: logOffsetX = %d, want %d", m.logOffsetX, logScrollStepX)
+	}
+	for i := 0; i < 200; i++ {
+		m = pressKey(t, m, "l")
+	}
+	if m.logOffsetX != maxX {
+		t.Errorf("l clamp: logOffsetX = %d, want maxX %d", m.logOffsetX, maxX)
+	}
+
+	// Rendered lines must never exceed the terminal width, even fully panned.
+	for lineNum, line := range strings.Split(m.View(), "\n") {
+		if vw := lipgloss.Width(line); vw > m.width {
+			t.Errorf("panned right, line %d: visual width %d > terminal width %d\n  line: %q",
+				lineNum+1, vw, m.width, line)
+		}
+	}
+
+	// h pans back to the left edge.
+	for i := 0; i < 200; i++ {
+		m = pressKey(t, m, "h")
+	}
+	if m.logOffsetX != 0 {
+		t.Errorf("h clamp: logOffsetX = %d, want 0", m.logOffsetX)
 	}
 }
 

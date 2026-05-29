@@ -30,6 +30,9 @@ const (
 	viewModeTraces
 )
 
+// logScrollStepX is how many columns h/l move the log pane horizontally.
+const logScrollStepX = 8
+
 type Model struct {
 	sup      *supervisor.Supervisor
 	store    *spanbuf.Store
@@ -42,7 +45,8 @@ type Model struct {
 	height     int
 
 	logFollow  bool
-	logOffset  int
+	logOffset  int // vertical scroll offset (lines from bottom), 0 = newest
+	logOffsetX int // horizontal scroll offset (columns), 0 = leftmost
 	allLogs    bool
 	showHelp   bool
 
@@ -143,10 +147,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.selected < len(m.displayOrder())-1 {
 				m.selected++
 				m.logOffset = 0
+				m.logOffsetX = 0
 				m.logFollow = true
 			}
 		} else {
-			m.logOffset++
+			// Scroll logs down, toward the newest lines.
+			if m.logOffset > 0 {
+				m.logOffset--
+			}
+			if m.logOffset == 0 {
+				m.logFollow = true // back at the live tail
+			}
 		}
 
 	case "k", "up":
@@ -154,13 +165,54 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.selected > 0 {
 				m.selected--
 				m.logOffset = 0
+				m.logOffsetX = 0
 				m.logFollow = true
 			}
 		} else {
-			if m.logOffset > 0 {
-				m.logOffset--
+			// Scroll logs up, toward the oldest lines.
+			maxOffset, _ := m.logScrollBounds()
+			if m.logOffset < maxOffset {
+				m.logOffset++
 				m.logFollow = false
 			}
+		}
+
+	case "h", "left":
+		if m.activePane == paneLogs {
+			m.logOffsetX -= logScrollStepX
+			if m.logOffsetX < 0 {
+				m.logOffsetX = 0
+			}
+		}
+
+	case "l", "right":
+		if m.activePane == paneLogs {
+			_, maxX := m.logScrollBounds()
+			m.logOffsetX += logScrollStepX
+			if m.logOffsetX > maxX {
+				m.logOffsetX = maxX
+			}
+		}
+
+	case "ctrl+d", "pgdown":
+		if m.activePane == paneLogs {
+			m.logOffset -= m.logPageStep()
+			if m.logOffset < 0 {
+				m.logOffset = 0
+			}
+			if m.logOffset == 0 {
+				m.logFollow = true
+			}
+		}
+
+	case "ctrl+u", "pgup":
+		if m.activePane == paneLogs {
+			maxOffset, _ := m.logScrollBounds()
+			m.logOffset += m.logPageStep()
+			if m.logOffset > maxOffset {
+				m.logOffset = maxOffset
+			}
+			m.logFollow = false
 		}
 
 	case "tab":
@@ -205,19 +257,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.searchMode = true
 		m.searchQuery = ""
+		m.logOffsetX = 0
 
 	case "G":
 		m.logFollow = true
 		m.logOffset = 0
 
 	case "g":
+		// scroll to top (oldest line)
 		m.logFollow = false
-		// scroll to top — set offset to max
-		if key := m.selectedKey(); key != "" {
-			if logs := m.sup.ServiceLogs(key); logs != nil {
-				m.logOffset = logs.Len()
-			}
-		}
+		maxOffset, _ := m.logScrollBounds()
+		m.logOffset = maxOffset
 
 	case "t":
 		if m.store != nil {
@@ -588,10 +638,101 @@ func (m Model) viewDetail(width, height int) string {
 	return strings.Join(rows, "\n")
 }
 
-func (m Model) viewLogs(width, height int) string {
+// logViewport mirrors the layout math in View to report the log pane's content
+// width and number of visible log lines. handleKey uses it to clamp scrolling
+// without rendering. Keep in sync with View's layout calculations.
+func (m Model) logViewport() (width, visibleLines int) {
+	leftWidth := m.width * 30 / 100
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
+	if leftWidth > 40 {
+		leftWidth = 40
+	}
+	rightWidth := m.width - leftWidth
+
+	mainHeight := m.height - 1 - 1 // status bar + terminal-scroll guard
+	detailHeight := 10
+	if mainHeight < 20 {
+		detailHeight = 6
+	}
+	logHeight := mainHeight - detailHeight
+
+	// viewLogs receives (rightWidth-4, logHeight-2); it then reserves 1 line
+	// for the header, so visible log lines = (logHeight-2) - 1.
+	width = rightWidth - 4
+	if width < 1 {
+		width = 1
+	}
+	visibleLines = (logHeight - 2) - 1
+	if visibleLines < 1 {
+		visibleLines = 1
+	}
+	return width, visibleLines
+}
+
+// logPageStep is the number of lines ctrl+d/ctrl+u (PageDown/PageUp) move,
+// leaving one line of overlap for context.
+func (m Model) logPageStep() int {
+	_, visibleLines := m.logViewport()
+	step := visibleLines - 1
+	if step < 1 {
+		step = 1
+	}
+	return step
+}
+
+// logScrollBounds returns the maximum vertical offset (oldest line at the top)
+// and the maximum horizontal offset (so the longest visible line's right edge
+// reaches the pane edge) for the current view. Used to clamp scrolling.
+func (m Model) logScrollBounds() (maxOffset, maxX int) {
+	width, visibleLines := m.logViewport()
+	lines := m.currentLogLines()
+	total := len(lines)
+
+	maxOffset = total - visibleLines
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+
+	// Horizontal bound is based on the lines currently in view. Recompute the
+	// visible window the same way viewLogs does (offset clamped to maxOffset).
+	offset := m.logOffset
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	end := total - offset
+	start := end - visibleLines
+	if start < 0 {
+		start = 0
+	}
+	longest := 0
+	for i := start; i < end && i < total; i++ {
+		if w := ansi.StringWidth(lines[i].Text); w > longest {
+			longest = w
+		}
+	}
+	textWidth := width - 11
+	if textWidth < 1 {
+		textWidth = 1
+	}
+	maxX = longest - textWidth
+	if maxX < 0 {
+		maxX = 0
+	}
+	return maxOffset, maxX
+}
+
+// currentLogLines returns the log lines for the active view (single service or
+// merged "all" view), already sorted and search-filtered. Shared by viewLogs
+// (rendering) and handleKey (scroll clamping) so both agree on the line set.
+func (m Model) currentLogLines() []logbuf.Line {
 	key := m.selectedKey()
 	if key == "" {
-		return ""
+		return nil
 	}
 
 	var lines []logbuf.Line
@@ -627,6 +768,15 @@ func (m Model) viewLogs(width, height int) string {
 		lines = filtered
 	}
 
+	return lines
+}
+
+func (m Model) viewLogs(width, height int) string {
+	if m.selectedKey() == "" {
+		return ""
+	}
+
+	lines := m.currentLogLines()
 	total := len(lines)
 	if total == 0 {
 		label := styleLabel.Render("Logs")
@@ -672,10 +822,19 @@ func (m Model) viewLogs(width, height int) string {
 	}
 	b.WriteString(label + follow + search + "\n")
 
+	// Width available for the log text after the "15:04:05 " timestamp prefix.
+	textWidth := width - 11
+	if textWidth < 1 {
+		textWidth = 1
+	}
+
 	for i := start; i < end; i++ {
 		l := lines[i]
 		ts := l.Timestamp.Format("15:04:05")
-		text := truncate(l.Text, width-11)
+		// Horizontal scroll: slice the line to the visible column window,
+		// preserving ANSI styling. ansi.Cut bounds the visual width so the
+		// rendered line never overflows the pane.
+		text := ansi.Cut(l.Text, m.logOffsetX, m.logOffsetX+textWidth)
 
 		var line string
 		if l.Stream == "stderr" {
@@ -699,7 +858,8 @@ func (m Model) viewStatusBar() string {
 	}
 
 	keys := []struct{ key, desc string }{
-		{"j/k", "navigate"},
+		{"j/k", "scroll"},
+		{"h/l", "pan"},
 		{"tab", "switch pane"},
 		{"r", "restart"},
 		{"s", "stop"},
@@ -733,6 +893,10 @@ func (m Model) viewHelp() string {
 	bindings := []struct{ key, desc string }{
 		{"j / ↓", "Move selection down / scroll logs down"},
 		{"k / ↑", "Move selection up / scroll logs up"},
+		{"h / ←", "Scroll logs left"},
+		{"l / →", "Scroll logs right"},
+		{"ctrl+d / pgdn", "Scroll logs down one page"},
+		{"ctrl+u / pgup", "Scroll logs up one page"},
 		{"tab", "Switch between service list and log pane"},
 		{"r", "Restart selected service"},
 		{"s", "Stop selected service"},
