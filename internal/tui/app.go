@@ -459,6 +459,10 @@ func (m Model) viewServiceList(width, height int) string {
 		line += " " + styledStatus
 
 		if i == m.selected {
+			// Strip nested ANSI codes first — their embedded resets would
+			// otherwise terminate the selection background partway through
+			// the line, leaving only the leading space highlighted.
+			line = ansi.Strip(line)
 			lineVisual := ansi.StringWidth(line)
 			if lineVisual < width {
 				line += strings.Repeat(" ", width-lineVisual)
