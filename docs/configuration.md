@@ -387,11 +387,19 @@ Cycles are detected at config load time and produce a validation error.
 
 Environment variables are loaded in this order (later overrides earlier):
 
-1. System environment
-2. Global `env_file`
-3. Global `env` (inline)
-4. Service `env_file`
-5. Service `env` (inline)
+1. Injected tracing defaults (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`)
+2. System environment
+3. Global `env_file`
+4. Global `env` (inline)
+5. Service `env_file`
+6. Service `env` (inline)
+
+The OTEL tracing defaults are the lowest-precedence source: when
+`global.tracing.enabled` is true, workbench injects
+`OTEL_EXPORTER_OTLP_ENDPOINT` (pointing at the embedded collector) and
+`OTEL_EXPORTER_OTLP_PROTOCOL` **only** if neither is already set by any other
+layer — so a value from your shell, `global.env_file`, a service `env_file`, or
+inline `env` always wins.
 
 ### .env file format
 

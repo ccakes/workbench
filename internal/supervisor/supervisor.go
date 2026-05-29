@@ -659,39 +659,30 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 		env = append(env, fileEnv...)
 	}
 
-	// OTEL env var injection when tracing is enabled
+	// OTEL env var injection when tracing is enabled. These are the
+	// lowest-precedence source: they only fill in defaults when the variable
+	// is not already set by any other layer (OS env, global env_file, global
+	// inline env, service env_file, or service inline env). The service inline
+	// env is appended after this block, so it is checked separately via the
+	// config map; everything else is already present in env by this point.
 	if s.cfg.Global.Tracing.Enabled {
 		port := s.cfg.Global.Tracing.Port
-		hasEndpoint := false
-		hasProtocol := false
-		// Check service-level env, env file, and global env for existing OTEL vars
-		for _, e := range env {
-			if len(e) > 30 && e[:30] == "OTEL_EXPORTER_OTLP_ENDPOINT=" {
-				hasEndpoint = true
-			} else if len(e) > 29 && e[:29] == "OTEL_EXPORTER_OTLP_PROTOCOL=" {
-				hasProtocol = true
+		alreadySet := func(key string) bool {
+			if _, ok := ms.cfg.Env[key]; ok {
+				return true
 			}
-		}
-		for k := range s.cfg.Global.Env {
-			switch k {
-			case "OTEL_EXPORTER_OTLP_ENDPOINT":
-				hasEndpoint = true
-			case "OTEL_EXPORTER_OTLP_PROTOCOL":
-				hasProtocol = true
+			prefix := key + "="
+			for _, e := range env {
+				if strings.HasPrefix(e, prefix) {
+					return true
+				}
 			}
+			return false
 		}
-		for k := range ms.cfg.Env {
-			switch k {
-			case "OTEL_EXPORTER_OTLP_ENDPOINT":
-				hasEndpoint = true
-			case "OTEL_EXPORTER_OTLP_PROTOCOL":
-				hasProtocol = true
-			}
-		}
-		if !hasEndpoint {
+		if !alreadySet("OTEL_EXPORTER_OTLP_ENDPOINT") {
 			env = append(env, fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:%d", port))
 		}
-		if !hasProtocol {
+		if !alreadySet("OTEL_EXPORTER_OTLP_PROTOCOL") {
 			env = append(env, "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf")
 		}
 	}

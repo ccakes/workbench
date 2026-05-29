@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] 2026-05-29
+
+### Added
+
+- Horizontal scrolling in the log pane (`h`/`l` or arrow keys) so log lines wider
+  than the pane can be read instead of being truncated.
+- Page scrolling in the log pane with `Ctrl+D`/`Ctrl+U` (and `PageDown`/`PageUp`).
+
+### Fixed
+
+- Log pane vertical scrolling direction was reversed: `j`/`k` (and the arrow keys)
+  now scroll down toward the newest output and up toward the oldest, matching their
+  labels. Scrolling also clamps correctly at both ends, and reaching the bottom
+  re-enables follow mode.
+- Injected OTEL tracing defaults (`OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_EXPORTER_OTLP_PROTOCOL`)
+  no longer override values set in `global.env_file`, a service `env_file`, or the OS
+  environment. The presence check used incorrect string lengths and never matched, so
+  the defaults clobbered those layers; they are now correctly treated as the
+  lowest-precedence source.
+
 ## [0.6.4] - 2026-05-28
 
 ### Fixed
