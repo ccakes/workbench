@@ -30,8 +30,10 @@ func NewContainerRunner(cfg config.ServiceConfig, serviceKey string, prefix stri
 func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.Bus, key string) (<-chan int, error) {
 	cc := r.cfg.Container
 
-	// Clean up any stale container with same name
-	cleanup := exec.Command("docker", "rm", "-f", r.name)
+	// Clean up any stale container with same name.
+	// -v also removes the container's anonymous volumes (e.g. images with a
+	// VOLUME directive like Postgres/Cassandra) to avoid leaking disk space.
+	cleanup := exec.Command("docker", "rm", "-f", "-v", r.name)
 	_ = cleanup.Run() // ignore errors — container may not exist
 
 	// Build docker run args
@@ -137,8 +139,9 @@ func (r *ContainerRunner) Stop(exitCh <-chan int, timeout time.Duration) {
 		<-exitCh
 	}
 
-	// Remove container
-	rmCmd := exec.Command("docker", "rm", r.containerID)
+	// Remove container along with its anonymous volumes (-v) so repeated
+	// starts/restarts don't leak dangling volumes for VOLUME-declaring images.
+	rmCmd := exec.Command("docker", "rm", "-v", r.containerID)
 	_ = rmCmd.Run()
 }
 

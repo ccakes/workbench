@@ -124,4 +124,15 @@ func readPipe(logs *logbuf.Buffer, bus *events.Bus, key string, rd io.ReadCloser
 			Data:    events.LogLineData{Stream: streamType, Line: line},
 		})
 	}
+	if err := scanner.Err(); err != nil {
+		// Surface read errors (e.g. a line exceeding the buffer limit) into the
+		// log stream instead of silently dropping the rest of the output.
+		msg := fmt.Sprintf("[bench] %s stream ended: %v", stream, err)
+		logs.Add(stream, msg)
+		bus.Publish(events.Event{
+			Type:    events.LogLine,
+			Service: key,
+			Data:    events.LogLineData{Stream: streamType, Line: msg},
+		})
+	}
 }

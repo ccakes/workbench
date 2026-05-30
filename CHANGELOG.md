@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-05-30
+
+### Added
+
+- `bench socket` command prints the control socket path of a running instance,
+  searching the common temp roots so it works even when the caller's `$TMPDIR`
+  differs from the one that started `bench up`.
+
+### Fixed
+
+- Container services no longer leak anonymous Docker volumes. `docker rm` is now
+  invoked with `-v`, so volumes created by images with a `VOLUME` directive
+  (Postgres, Cassandra, etc.) are removed alongside the container on every stop
+  and restart instead of accumulating as dangling volumes that consume disk.
+- Control commands (`status`, `logs`, `start`, etc.) now auto-discover the
+  running instance's socket across temp directories. Previously, when a command
+  ran with a different `$TMPDIR` than `bench up` (common for agents that set
+  their own `$TMPDIR`), it silently failed to connect and `bench status` showed
+  `configured` for every service.
+
 ## [0.6.6] 2026-05-29
 
 ### Added
