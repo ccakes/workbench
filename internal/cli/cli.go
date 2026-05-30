@@ -92,6 +92,8 @@ func Run() int {
 		return runRestart(forward)
 	case "status":
 		return runStatus(forward)
+	case "socket":
+		return runSocket(forward)
 	case "logs":
 		return runLogs(forward)
 	case "wait":
@@ -131,6 +133,7 @@ Commands:
   stop               Stop specific services
   restart            Restart specific services
   status             Show service status
+  socket             Print the control socket path of a running instance
   logs               Show service logs
   wait               Block until services reach ready
   clean              Remove stale socket and prefix-matched containers
@@ -174,17 +177,17 @@ func loadConfig(configPath string) (*config.Config, error) {
 // If socketOverride or BENCH_SOCKET is set, config resolution is skipped.
 func connectToRunning(configPath, socketOverride string) (*api.Client, error) {
 	var (
-		sockPath string
-		resolved string
-		source   string // describes where sockPath came from, for diagnostics
+		candidates []string
+		resolved   string
+		source     string // describes where the socket path came from, for diagnostics
 	)
 
 	switch {
 	case socketOverride != "":
-		sockPath = socketOverride
+		candidates = []string{socketOverride}
 		source = "--socket"
 	case os.Getenv("BENCH_SOCKET") != "":
-		sockPath = os.Getenv("BENCH_SOCKET")
+		candidates = []string{os.Getenv("BENCH_SOCKET")}
 		source = "BENCH_SOCKET"
 	default:
 		r, err := resolveConfigPath(configPath)
@@ -192,19 +195,34 @@ func connectToRunning(configPath, socketOverride string) (*api.Client, error) {
 			return nil, err
 		}
 		resolved = r
-		sp, err := api.SocketPath(resolved)
+		// Try the socket for the current $TMPDIR first (the common case), then
+		// fall back to sockets discovered in other temp dirs — agents often
+		// override $TMPDIR, so the server's socket may live elsewhere.
+		def, err := api.SocketPath(resolved)
 		if err != nil {
 			return nil, err
 		}
-		sockPath = sp
+		candidates = append(candidates, def)
+		if existing, err := api.ExistingSockets(resolved); err == nil {
+			for _, p := range existing {
+				if p != def {
+					candidates = append(candidates, p)
+				}
+			}
+		}
 		source = "config"
 	}
 
-	client := api.NewClient(sockPath)
-	if err := client.Ping(); err != nil {
-		return nil, noRunningBenchError(sockPath, resolved, source, err)
+	var lastErr error
+	for _, sockPath := range candidates {
+		client := api.NewClient(sockPath)
+		if err := client.Ping(); err == nil {
+			return client, nil
+		} else {
+			lastErr = err
+		}
 	}
-	return client, nil
+	return nil, noRunningBenchError(candidates[0], resolved, source, lastErr)
 }
 
 // noRunningBenchError formats a connect failure with enough context to act on:
@@ -634,6 +652,52 @@ func runStatus(args []string) int {
 			cmdStr)
 	}
 	return 0
+}
+
+// runSocket prints the control socket path of a running bench instance for the
+// resolved config. It searches the candidate temp directories so it works even
+// when the caller's $TMPDIR differs from the one the server was started under
+// (common for agents). On success the live path is printed to stdout; if no
+// running instance is found, the expected default path is reported on stderr
+// and the command exits non-zero.
+func runSocket(args []string) int {
+	fs := flag.NewFlagSet("socket", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
+	_ = fs.Parse(reorderFlags(args))
+
+	// An explicit override or BENCH_SOCKET wins — echo it back verbatim.
+	if *socketOverride != "" {
+		fmt.Println(*socketOverride)
+		return 0
+	}
+	if env := os.Getenv("BENCH_SOCKET"); env != "" {
+		fmt.Println(env)
+		return 0
+	}
+
+	resolved, err := resolveConfigPath(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	sockPath, live, err := api.FindSocket(resolved)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if live {
+		fmt.Println(sockPath)
+		return 0
+	}
+
+	def, _ := api.SocketPath(resolved)
+	fmt.Fprintf(os.Stderr,
+		"no running bench found for config %s (expected socket %s).\n"+
+			"  start it with: bench up --config %s\n",
+		resolved, def, resolved)
+	return 1
 }
 
 // statusFromRunning queries live status from a running bench instance.

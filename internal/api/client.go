@@ -93,16 +93,109 @@ func (c *Client) Ping() error {
 
 // SocketPath derives the socket path from a config file's absolute path.
 func SocketPath(configPath string) (string, error) {
-	abs, err := filepath.Abs(configPath)
-	if err != nil {
-		return "", fmt.Errorf("resolving config path: %w", err)
-	}
 	dir, err := privateSocketDir()
 	if err != nil {
 		return "", err
 	}
+	name, err := SocketName(configPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// SocketName returns the per-config socket filename. It depends only on the
+// absolute config path, not on $TMPDIR, so the same config always yields the
+// same filename regardless of which temp directory it lives in.
+func SocketName(configPath string) (string, error) {
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving config path: %w", err)
+	}
 	h := sha256.Sum256([]byte(abs))
-	return filepath.Join(dir, fmt.Sprintf("bench-%x.sock", h[:4])), nil
+	return fmt.Sprintf("bench-%x.sock", h[:4]), nil
+}
+
+// candidateSocketDirs returns the per-user bench socket directories to search.
+// The server places its socket under os.TempDir()/bench-<uid>, but os.TempDir()
+// honors $TMPDIR — so a `bench up` in a login shell and a control command run
+// from an agent (which often sets its own $TMPDIR) compute different
+// directories. Searching the common temp roots lets discovery find the socket
+// regardless of which environment started the server.
+func candidateSocketDirs() []string {
+	uid := os.Getuid()
+	name := "bench-user"
+	if uid >= 0 {
+		name = fmt.Sprintf("bench-%d", uid)
+	}
+
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(base string) {
+		if base == "" {
+			return
+		}
+		p := filepath.Join(base, name)
+		if !seen[p] {
+			seen[p] = true
+			dirs = append(dirs, p)
+		}
+	}
+
+	add(os.TempDir()) // honors $TMPDIR — current environment first
+	add("/tmp")       // Go's os.TempDir() fallback when $TMPDIR is unset
+	add("/var/tmp")
+	// macOS per-user temp dirs: /var/folders/XX/YYYYYYYY/T
+	if matches, err := filepath.Glob("/var/folders/*/*/T"); err == nil {
+		for _, m := range matches {
+			add(m)
+		}
+	}
+	return dirs
+}
+
+// ExistingSockets returns the socket paths for a config that actually exist on
+// disk, across all candidate temp directories. The default location (current
+// $TMPDIR) is returned first when present. Stale files are included; callers
+// should Ping to confirm a live server.
+func ExistingSockets(configPath string) ([]string, error) {
+	name, err := SocketName(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, dir := range candidateSocketDirs() {
+		p := filepath.Join(dir, name)
+		if fi, err := os.Stat(p); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// FindSocket locates the socket for a config, searching candidate temp
+// directories. It returns the first live socket (one that responds to Ping).
+// If none is live it falls back to the first existing socket file, and failing
+// that to the default computed path. The bool reports whether a live server
+// was found.
+func FindSocket(configPath string) (string, bool, error) {
+	existing, err := ExistingSockets(configPath)
+	if err != nil {
+		return "", false, err
+	}
+	for _, p := range existing {
+		if NewClient(p).Ping() == nil {
+			return p, true, nil
+		}
+	}
+	if len(existing) > 0 {
+		return existing[0], false, nil
+	}
+	def, err := SocketPath(configPath)
+	if err != nil {
+		return "", false, err
+	}
+	return def, false, nil
 }
 
 // SocketPathFromEnvOrConfig returns the socket path from BENCH_SOCKET env,

@@ -349,6 +349,80 @@ func TestSocketPath(t *testing.T) {
 	}
 }
 
+func TestSocketNameTMPDIRIndependent(t *testing.T) {
+	const cfg = "/home/user/project/bench.yml"
+
+	t.Setenv("TMPDIR", "/tmp/one")
+	n1, err := SocketName(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, err := SocketPath(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TMPDIR", "/var/folders/xx/yyyyyyyy/T")
+	n2, err := SocketName(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := SocketPath(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n1 != n2 {
+		t.Errorf("socket name should not depend on $TMPDIR: %q != %q", n1, n2)
+	}
+	if p1 == p2 {
+		t.Errorf("socket path directory should track $TMPDIR but did not: both %q", p1)
+	}
+}
+
+// TestFindSocketDiscoversAcrossTMPDIR mimics an agent: the server is started
+// under one temp root (/tmp, a candidate dir) while discovery runs with a
+// different $TMPDIR. FindSocket must still locate the live socket.
+func TestFindSocketDiscoversAcrossTMPDIR(t *testing.T) {
+	// Unique config path keeps the derived socket filename from colliding with
+	// any real or concurrent bench instance.
+	cfgPath := filepath.Join(shortTempDir(t), "bench.yml")
+
+	// Server temp root is /tmp, which candidateSocketDirs always searches.
+	t.Setenv("TMPDIR", "/tmp")
+	serverSock, err := SocketPath(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(serverSock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(t)
+	bus := events.NewBus()
+	sup := supervisor.New(cfg, bus)
+	srv := New(sup, nil, serverSock, "test")
+	if err := srv.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	t.Cleanup(func() { _ = os.Remove(serverSock) })
+
+	// Switch to a different $TMPDIR — the "agent" environment.
+	t.Setenv("TMPDIR", shortTempDir(t))
+
+	got, live, err := FindSocket(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !live {
+		t.Fatalf("FindSocket did not find live socket; got %q live=%v", got, live)
+	}
+	if got != serverSock {
+		t.Errorf("FindSocket = %q, want %q", got, serverSock)
+	}
+}
+
 func shortTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "bench-test-")

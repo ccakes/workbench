@@ -8,6 +8,31 @@ workbench searches for `bench.yml` or `bench.yaml` starting from the current dir
 - Create a `bench.yml` in your project
 - Use `--config <path>` to specify the location explicitly
 
+### `bench status` shows "configured" for every service (even though bench is running)
+
+`configured` only appears in `bench status`'s config-only fallback — it never
+comes from a live server. Seeing it for *every* service means the command
+couldn't connect to the running `bench up`.
+
+The usual cause is a `$TMPDIR` mismatch: the socket lives under `$TMPDIR`, and a
+command run from a different environment than the one that started `bench up`
+(commonly an agent or sandbox that sets its own `$TMPDIR`) looks in the wrong
+directory. Control commands search the common temp roots to bridge this, but for
+an unusual `$TMPDIR` you can point them at the socket explicitly:
+
+```bash
+bench socket                                 # prints the live socket path
+bench --socket "$(bench socket)" status      # or: export BENCH_SOCKET="$(bench socket)"
+```
+
+If `bench socket` also reports nothing, confirm an instance is actually running
+for *this* config (the socket filename is derived from the config's absolute
+path), and look for the file directly:
+
+```bash
+find /tmp /var/folders -name 'bench-*.sock' 2>/dev/null
+```
+
 ### Service shows "failed" immediately
 
 The service command could not be started. Check:

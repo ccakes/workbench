@@ -54,6 +54,38 @@ All subcommands accept `--config <path>` and `--socket <path>` (or
 `BENCH_SOCKET` env var). Positional service names can appear before or after
 flags.
 
+## Finding a running instance (agents read this)
+
+Control commands talk to `bench up` over a Unix socket whose directory comes
+from `$TMPDIR`. Agents (including this one) usually run with a **different
+`$TMPDIR`** than the user's login shell that started `bench up`, so the naive
+socket path won't match where the server actually put it.
+
+You normally don't need to do anything: `status`, `logs`, `start`, etc.
+**auto-discover** the socket by searching the common temp roots (`$TMPDIR`,
+`/tmp`, `/var/folders/*/*/T`), so they just work across this mismatch.
+
+If a command still reports *"no bench up is running"* but the user says one is,
+resolve the socket explicitly and pass it along:
+
+```bash
+bench socket                         # prints the live socket path, or exits 1
+bench --socket "$(bench socket)" status -json
+# or export it once for the session:
+export BENCH_SOCKET="$(bench socket)"
+```
+
+`bench socket` is the fallback. If even that misses (an unusual `$TMPDIR`),
+locate it directly — the filename is stable per config:
+
+```bash
+find /tmp /var/folders -name 'bench-*.sock' 2>/dev/null
+```
+
+A "configured" status for **every** service is the tell-tale sign of a missed
+connection: that string only appears in the config-only fallback, never from a
+live server.
+
 ## Status JSON: useful fields
 
 `key`, `status`, `type`, `pid`, `uptime`, `restart_count`, `exit_code`,

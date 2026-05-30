@@ -19,6 +19,19 @@ Override the socket path with:
 - `--socket <path>` flag on any subcommand
 - `BENCH_SOCKET` environment variable
 
+### Discovery across temp directories
+
+The socket *filename* (`bench-<hash>.sock`) depends only on the absolute config
+path, but the *directory* comes from `$TMPDIR`, which honors the `TMPDIR`
+environment variable. A `bench up` started in a login shell and a control
+command run from an agent (which often sets its own `$TMPDIR`) therefore compute
+different directories and would otherwise fail to find each other.
+
+To make this transparent, control commands search the common per-user temp
+roots — the current `$TMPDIR`, `/tmp`, `/var/tmp`, and `/var/folders/*/*/T`
+(macOS) — for the config's socket, preferring the current `$TMPDIR`. Run
+`bench socket` to print the resolved live socket path (see below).
+
 ## Protocol
 
 Request-per-connection model. The client connects, sends one JSON request line, receives one JSON response line, then the connection closes.
@@ -137,6 +150,7 @@ The following subcommands connect to a running `bench up` instance via the socke
 
 | Command | Behavior |
 |---------|----------|
+| `bench socket` | Prints the running instance's socket path (searches temp dirs); exits non-zero if none is live. |
 | `bench status` | Shows live PID, uptime, restart counts. Falls back to config-only if no running instance. |
 | `bench start <svc>` | Starts a service in the running instance. |
 | `bench stop <svc>` | Stops a service in the running instance. |
