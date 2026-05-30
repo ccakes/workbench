@@ -53,17 +53,19 @@ type Model struct {
 	searchMode  bool
 	searchQuery string
 
+	confirmQuit bool
+
 	// Trace view state
-	viewMode       int
-	traceSelected  int
-	tracePane      int // 0=span list, 1=span detail
-	traceSpans     []spanbuf.Span
-	traceFilter    string
+	viewMode        int
+	traceSelected   int
+	tracePane       int // 0=span list, 1=span detail
+	traceSpans      []spanbuf.Span
+	traceFilter     string
 	traceFilterMode bool
-	traceSortMode  int // 0=time, 1=duration, 2=service
-	waterfallMode  bool
-	waterfallSpans []spanbuf.Span
-	serviceMapMode bool
+	traceSortMode   int // 0=time, 1=duration, 2=service
+	waterfallMode   bool
+	waterfallSpans  []spanbuf.Span
+	serviceMapMode  bool
 }
 
 type eventMsg events.Event
@@ -111,6 +113,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.confirmQuit {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				return m, tea.Quit
+			default:
+				m.confirmQuit = false
+			}
+			return m, nil
+		}
 		if m.searchMode || m.traceFilterMode {
 			return m.handleSearchKey(msg)
 		}
@@ -140,7 +151,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
-		return m, tea.Quit
+		m.confirmQuit = true
+		return m, nil
 
 	case "j", "down":
 		if m.activePane == paneList {
@@ -380,6 +392,10 @@ func (m Model) View() string {
 		return "initializing..."
 	}
 
+	if m.confirmQuit {
+		return m.viewConfirmQuit()
+	}
+
 	if m.showHelp {
 		return m.viewHelp()
 	}
@@ -389,13 +405,7 @@ func (m Model) View() string {
 	}
 
 	// Layout: left pane (service list) | right pane (detail + logs)
-	leftWidth := m.width * 30 / 100
-	if leftWidth < 20 {
-		leftWidth = 20
-	}
-	if leftWidth > 40 {
-		leftWidth = 40
-	}
+	leftWidth := min(max(m.width*30/100, 20), 40)
 	rightWidth := m.width - leftWidth
 
 	statusBarHeight := 1
@@ -642,13 +652,7 @@ func (m Model) viewDetail(width, height int) string {
 // width and number of visible log lines. handleKey uses it to clamp scrolling
 // without rendering. Keep in sync with View's layout calculations.
 func (m Model) logViewport() (width, visibleLines int) {
-	leftWidth := m.width * 30 / 100
-	if leftWidth < 20 {
-		leftWidth = 20
-	}
-	if leftWidth > 40 {
-		leftWidth = 40
-	}
+	leftWidth := min(max(m.width*30/100, 20), 40)
 	rightWidth := m.width - leftWidth
 
 	mainHeight := m.height - 1 - 1 // status bar + terminal-scroll guard
@@ -660,14 +664,8 @@ func (m Model) logViewport() (width, visibleLines int) {
 
 	// viewLogs receives (rightWidth-4, logHeight-2); it then reserves 1 line
 	// for the header, so visible log lines = (logHeight-2) - 1.
-	width = rightWidth - 4
-	if width < 1 {
-		width = 1
-	}
-	visibleLines = (logHeight - 2) - 1
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
+	width = max(rightWidth-4, 1)
+	visibleLines = max((logHeight-2)-1, 1)
 	return width, visibleLines
 }
 
@@ -675,10 +673,7 @@ func (m Model) logViewport() (width, visibleLines int) {
 // leaving one line of overlap for context.
 func (m Model) logPageStep() int {
 	_, visibleLines := m.logViewport()
-	step := visibleLines - 1
-	if step < 1 {
-		step = 1
-	}
+	step := max(visibleLines-1, 1)
 	return step
 }
 
@@ -690,39 +685,21 @@ func (m Model) logScrollBounds() (maxOffset, maxX int) {
 	lines := m.currentLogLines()
 	total := len(lines)
 
-	maxOffset = total - visibleLines
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
+	maxOffset = max(total-visibleLines, 0)
 
 	// Horizontal bound is based on the lines currently in view. Recompute the
 	// visible window the same way viewLogs does (offset clamped to maxOffset).
-	offset := m.logOffset
-	if offset > maxOffset {
-		offset = maxOffset
-	}
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(min(m.logOffset, maxOffset), 0)
 	end := total - offset
-	start := end - visibleLines
-	if start < 0 {
-		start = 0
-	}
+	start := max(end-visibleLines, 0)
 	longest := 0
 	for i := start; i < end && i < total; i++ {
 		if w := ansi.StringWidth(lines[i].Text); w > longest {
 			longest = w
 		}
 	}
-	textWidth := width - 11
-	if textWidth < 1 {
-		textWidth = 1
-	}
-	maxX = longest - textWidth
-	if maxX < 0 {
-		maxX = 0
-	}
+	textWidth := max(width-11, 1)
+	maxX = max(longest-textWidth, 0)
 	return maxOffset, maxX
 }
 
@@ -787,22 +764,12 @@ func (m Model) viewLogs(width, height int) string {
 	}
 
 	// Calculate visible range
-	visibleLines := height - 1 // reserve 1 for header
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
+	visibleLines := max(
+		// reserve 1 for header
+		height-1, 1)
 
-	end := total - m.logOffset
-	if end < 0 {
-		end = 0
-	}
-	if end > total {
-		end = total
-	}
-	start := end - visibleLines
-	if start < 0 {
-		start = 0
-	}
+	end := min(max(total-m.logOffset, 0), total)
+	start := max(end-visibleLines, 0)
 
 	var b strings.Builder
 	// Header
@@ -820,13 +787,13 @@ func (m Model) viewLogs(width, height int) string {
 	} else if m.searchQuery != "" {
 		search = styleLabel.Render(fmt.Sprintf(" [filter: %s]", m.searchQuery))
 	}
-	b.WriteString(label + follow + search + "\n")
+	b.WriteString(label)
+	b.WriteString(follow)
+	b.WriteString(search)
+	b.WriteString("\n")
 
 	// Width available for the log text after the "15:04:05 " timestamp prefix.
-	textWidth := width - 11
-	if textWidth < 1 {
-		textWidth = 1
-	}
+	textWidth := max(width-11, 1)
 
 	for i := start; i < end; i++ {
 		l := lines[i]
@@ -883,6 +850,22 @@ func (m Model) viewStatusBar() string {
 
 	bar := " " + strings.Join(parts, "  ")
 	return truncate(bar, m.width)
+}
+
+func (m Model) viewConfirmQuit() string {
+	prompt := lipgloss.JoinVertical(lipgloss.Center,
+		styleTitle.Render("Quit workbench?"),
+		"",
+		styleHelp.Render("This will stop all managed services."),
+		"",
+		styleHelpKey.Render("y")+styleHelp.Render(" confirm   ")+
+			styleHelpKey.Render("n")+styleHelp.Render(" cancel"),
+	)
+
+	dialog := styleBorderActive.Padding(1, 3).Render(prompt)
+
+	return lipgloss.Place(m.width, m.height-1,
+		lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func (m Model) viewHelp() string {

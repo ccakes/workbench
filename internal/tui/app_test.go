@@ -123,7 +123,7 @@ func TestLogScroll(t *testing.T) {
 
 	// Seed many lines, each far wider than the pane.
 	logs := sup.ServiceLogs("svc")
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		logs.Add("stdout", fmt.Sprintf("line %03d: %s", i, strings.Repeat("x", 120)))
 	}
 
@@ -153,7 +153,7 @@ func TestLogScroll(t *testing.T) {
 	}
 
 	// k clamps at maxOffset no matter how far we push.
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		m = pressKey(t, m, "k")
 	}
 	if m.logOffset != maxOffset {
@@ -161,7 +161,7 @@ func TestLogScroll(t *testing.T) {
 	}
 
 	// j scrolls back down to the bottom and re-enables follow.
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		m = pressKey(t, m, "j")
 	}
 	if m.logOffset != 0 {
@@ -176,7 +176,7 @@ func TestLogScroll(t *testing.T) {
 	if m.logOffsetX != logScrollStepX {
 		t.Errorf("after one l: logOffsetX = %d, want %d", m.logOffsetX, logScrollStepX)
 	}
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		m = pressKey(t, m, "l")
 	}
 	if m.logOffsetX != maxX {
@@ -192,7 +192,7 @@ func TestLogScroll(t *testing.T) {
 	}
 
 	// h pans back to the left edge.
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		m = pressKey(t, m, "h")
 	}
 	if m.logOffsetX != 0 {

@@ -21,14 +21,15 @@ func (m Model) handleTraceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "m", "esc":
 			m.serviceMapMode = false
 		case "q", "ctrl+c":
-			return m, tea.Quit
+			m.confirmQuit = true
 		}
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "q", "ctrl+c":
-		return m, tea.Quit
+		m.confirmQuit = true
+		return m, nil
 
 	case "t", "esc":
 		m.viewMode = viewModeServices
@@ -129,10 +130,7 @@ func (m Model) viewTraces() string {
 	}
 
 	// Split: left 40% span list, right 60% span detail
-	leftWidth := m.width * 40 / 100
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
+	leftWidth := max(m.width*40/100, 30)
 	rightWidth := m.width - leftWidth
 
 	statusBarHeight := 1
@@ -196,7 +194,11 @@ func (m Model) viewSpanList(width, height int) string {
 	} else if m.traceFilter != "" {
 		filter = styleLabel.Render(fmt.Sprintf(" [filter: %s]", m.traceFilter))
 	}
-	b.WriteString(title + count + styleLabel.Render(sortLabel) + filter + "\n")
+	b.WriteString(title)
+	b.WriteString(count)
+	b.WriteString(styleLabel.Render(sortLabel))
+	b.WriteString(filter)
+	b.WriteString("\n")
 
 	if len(spans) == 0 {
 		b.WriteString(styleLabel.Render("  (no spans)"))

@@ -51,5 +51,13 @@ right edge stops at the pane edge.
 | Key | Action |
 |-----|--------|
 | `?` | Toggle help screen |
-| `q` | Quit workbench |
-| `Ctrl+C` | Quit workbench |
+| `q` | Quit workbench (asks for confirmation) |
+| `Ctrl+C` | Quit workbench (asks for confirmation) |
+
+### Quit confirmation
+
+Pressing `q` or `Ctrl+C` opens a confirmation dialog before exiting, so an
+accidental keypress won't tear down all your running services. Press `y`
+(or `Enter`) to confirm and quit, or any other key (e.g. `n` / `Esc`) to cancel
+and return to the TUI. The prompt works from any view — the service list, the
+trace browser, the waterfall, and the service map.

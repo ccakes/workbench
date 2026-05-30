@@ -50,13 +50,7 @@ func TestDebugPaneHeights(t *testing.T) {
 	m.width = 130
 	m.height = 35
 
-	leftWidth := m.width * 30 / 100
-	if leftWidth < 20 {
-		leftWidth = 20
-	}
-	if leftWidth > 40 {
-		leftWidth = 40
-	}
+	leftWidth := min(max(m.width*30/100, 20), 40)
 	rightWidth := m.width - leftWidth
 	mainHeight := m.height - 1 - 1
 

@@ -15,7 +15,7 @@ import (
 func (m Model) handleWaterfallKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
-		return m, tea.Quit
+		m.confirmQuit = true
 	case "esc":
 		m.waterfallMode = false
 	}
@@ -56,7 +56,8 @@ func (m Model) viewWaterfall() string {
 		truncate(traceID, 16),
 		len(spans),
 		formatSpanDuration(traceDuration))
-	b.WriteString(styleTitle.Render(header) + "\n\n")
+	b.WriteString(styleTitle.Render(header))
+	b.WriteString("\n\n")
 
 	// Calculate column widths
 	svcWidth := 10
@@ -110,7 +111,8 @@ func (m Model) viewWaterfall() string {
 		dur := formatSpanDuration(s.Duration)
 
 		line := " " + styleValue.Render(svc) + " " + name + " |" + bar + "| " + styleLabel.Render(dur)
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteString("\n")
 		usedLines++
 	}
 
@@ -139,7 +141,8 @@ func (m Model) viewServiceMap() string {
 	_ = statusBarHeight
 
 	var b strings.Builder
-	b.WriteString(styleTitle.Render("Service Map") + "\n\n")
+	b.WriteString(styleTitle.Render("Service Map"))
+	b.WriteString("\n\n")
 
 	if len(snap.Edges) == 0 {
 		b.WriteString(styleLabel.Render("  (no service interactions recorded)"))
@@ -156,7 +159,8 @@ func (m Model) viewServiceMap() string {
 				styleServiceMapNode.Render(edge.To),
 				edge.CallCount,
 				errStr)
-			b.WriteString(line + "\n")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 
