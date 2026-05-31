@@ -8,8 +8,8 @@ type serviceEdgeKey struct {
 }
 
 type serviceEdge struct {
-	CallCount    int
-	ErrorCount   int
+	CallCount     int
+	ErrorCount    int
 	TotalDuration time.Duration
 }
 

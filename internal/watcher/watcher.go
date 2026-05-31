@@ -87,10 +87,10 @@ func (m *Manager) addServiceWatcher(key string, svcCfg config.ServiceConfig) err
 	}
 
 	sw := &serviceWatcher{
-		key:      key,
-		svcCfg:   svcCfg,
+		key:       key,
+		svcCfg:    svcCfg,
 		fsWatcher: fsw,
-		debounce: svcCfg.Watch.GetDebounce(m.cfg.Global.WatchDebounce),
+		debounce:  svcCfg.Watch.GetDebounce(m.cfg.Global.WatchDebounce),
 	}
 
 	// Add watch directories

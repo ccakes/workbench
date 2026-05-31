@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-05-31
+
+### Added
+
+- Quit confirmation prompt in the TUI: pressing `q` or `Ctrl+C` now opens a
+  "Quit workbench?" dialog so an accidental keypress no longer tears down all
+  running services. Confirm with `y`/`Enter`, cancel with any other key.
+
+### Fixed
+
+- Container services now receive a reachable OTLP endpoint. The injected
+  `OTEL_EXPORTER_OTLP_ENDPOINT` previously always used `localhost`, which inside
+  a container is its own loopback — so container spans were silently dropped
+  while host-process spans worked. Container services now get
+  `http://host.docker.internal:<port>`, and each container run is given a
+  `host.docker.internal:host-gateway` alias so this resolves on every Docker
+  runtime.
+- The trace collector now honours OTLP/HTTP request headers. It decompresses
+  bodies sent with `Content-Encoding: gzip` (the default for several SDKs,
+  including the Perl OTLP exporter) and decodes JSON payloads
+  (`Content-Type: application/json`) in addition to protobuf. Previously a
+  gzipped or JSON export was rejected with HTTP 400 and the spans were lost.
+
 ## [0.6.7] - 2026-05-30
 
 ### Added

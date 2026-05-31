@@ -8,7 +8,7 @@ import (
 
 // traceGroup holds all spans belonging to a single trace.
 type traceGroup struct {
-	spans     []Span
+	spans      []Span
 	totalBytes int
 	rootStart  time.Time
 	// edges tracks service map edges contributed by this trace for rollback on eviction.
@@ -22,12 +22,12 @@ type traceOrderEntry struct {
 
 // Store is a size-based ring buffer for spans with trace-level eviction.
 type Store struct {
-	mu        sync.RWMutex
-	traces    map[[16]byte]*traceGroup
-	order     []traceOrderEntry
+	mu         sync.RWMutex
+	traces     map[[16]byte]*traceGroup
+	order      []traceOrderEntry
 	totalBytes int64
 	maxBytes   int64
-	svcMap    *serviceMap
+	svcMap     *serviceMap
 }
 
 // NewStore creates a span store with the given maximum byte capacity.

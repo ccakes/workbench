@@ -65,10 +65,10 @@ func TestDebugRender(t *testing.T) {
 		m.selected = i
 		output := m.View()
 		lines := strings.Split(output, "\n")
-		
+
 		fmt.Printf("\n=== Selected: %s (index %d) ===\n", key, i)
 		fmt.Printf("Total lines: %d\n", len(lines))
-		
+
 		maxW := 0
 		for j, line := range lines {
 			vw := lipgloss.Width(line)

@@ -9,18 +9,18 @@ import (
 
 func TestUnicodeIndicatorWidths(t *testing.T) {
 	chars := map[string]string{
-		"BLACK CIRCLE":         "●",
-		"CIRCLE LEFT HALF":     "◐",
-		"CIRCLE RIGHT HALF":    "◑",
-		"DOTTED CIRCLE":        "◌",
-		"WHITE CIRCLE":         "○",
-		"CIRCLED DIVISION":     "⊘",
-		"ROUNDED BORDER TL":    "╭",
-		"ROUNDED BORDER TR":    "╮",
-		"ROUNDED BORDER BL":    "╰",
-		"ROUNDED BORDER BR":    "╯",
-		"HORIZONTAL LINE":      "─",
-		"VERTICAL LINE":        "│",
+		"BLACK CIRCLE":      "●",
+		"CIRCLE LEFT HALF":  "◐",
+		"CIRCLE RIGHT HALF": "◑",
+		"DOTTED CIRCLE":     "◌",
+		"WHITE CIRCLE":      "○",
+		"CIRCLED DIVISION":  "⊘",
+		"ROUNDED BORDER TL": "╭",
+		"ROUNDED BORDER TR": "╮",
+		"ROUNDED BORDER BL": "╰",
+		"ROUNDED BORDER BR": "╯",
+		"HORIZONTAL LINE":   "─",
+		"VERTICAL LINE":     "│",
 	}
 
 	for name, ch := range chars {

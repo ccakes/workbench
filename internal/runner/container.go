@@ -161,4 +161,3 @@ func (r *ContainerRunner) Info() RunnerInfo {
 		Ports:       r.cfg.Container.Ports,
 	}
 }
-

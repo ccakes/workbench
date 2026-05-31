@@ -36,6 +36,7 @@ internal/
 - **Snapshot pattern**: `service.Info` uses `RWMutex` with `Snapshot()` for lock-free TUI reads.
 - **Per-service goroutine**: Supervisor uses `runLoop` with channel-based stop/restart. Only the `startProcess` goroutine calls `cmd.Wait()` to avoid double-wait deadlocks.
 - **Process groups**: `syscall.Setpgid` for clean signal handling; `stopProcess` sends SIGTERM to the group, escalates to SIGKILL after timeout.
+- **Formatting & linting**: before committing, run `gofmt -w .`, `go vet ./...`, and `golangci-lint run ./...`, and make sure all are clean (`gofmt -l .` should print nothing). Keep the whole tree gofmt-clean, not just touched files.
 
 ## TUI gotchas
 

@@ -153,11 +153,11 @@ func (s *Server) handleRestart(raw json.RawMessage) (any, error) {
 }
 
 type logsParams struct {
-	Service  string `json:"service"`           // single service (legacy form)
-	Services []string `json:"services"`        // multi-service tail; empty + no Service = all
-	Last     int    `json:"last"`
-	AfterSeq uint64 `json:"after_seq"`         // sequence cursor — return only lines with seq > this value (single-service only)
-	SinceMs  int64  `json:"since_ms"`          // return only lines with timestamp >= now - SinceMs
+	Service  string   `json:"service"`  // single service (legacy form)
+	Services []string `json:"services"` // multi-service tail; empty + no Service = all
+	Last     int      `json:"last"`
+	AfterSeq uint64   `json:"after_seq"` // sequence cursor — return only lines with seq > this value (single-service only)
+	SinceMs  int64    `json:"since_ms"`  // return only lines with timestamp >= now - SinceMs
 }
 
 // LogLine is the wire format for a log line. Exported for CLI reuse.
@@ -388,10 +388,10 @@ type tracesParams struct {
 }
 
 type traceSummary struct {
-	TraceID   string `json:"trace_id"`
-	RootStart string `json:"root_start"`
-	SpanCount int    `json:"span_count"`
-	RootName  string `json:"root_name,omitempty"`
+	TraceID   string   `json:"trace_id"`
+	RootStart string   `json:"root_start"`
+	SpanCount int      `json:"span_count"`
+	RootName  string   `json:"root_name,omitempty"`
 	Services  []string `json:"services,omitempty"`
 }
 

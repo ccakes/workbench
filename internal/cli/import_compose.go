@@ -17,21 +17,21 @@ import (
 // Output structs for clean YAML marshaling with omitempty support.
 
 type benchOutput struct {
-	Version  int                       `yaml:"version"`
+	Version  int                        `yaml:"version"`
 	Services map[string]benchServiceOut `yaml:"services"`
 }
 
 type benchServiceOut struct {
-	Dir             string            `yaml:"dir,omitempty"`
+	Dir             string             `yaml:"dir,omitempty"`
 	Container       *benchContainerOut `yaml:"container,omitempty"`
-	Env             map[string]string `yaml:"env,omitempty"`
-	EnvFile         string            `yaml:"env_file,omitempty"`
-	DependsOn       []string          `yaml:"depends_on,omitempty"`
-	Restart         *benchRestartOut  `yaml:"restart,omitempty"`
+	Env             map[string]string  `yaml:"env,omitempty"`
+	EnvFile         string             `yaml:"env_file,omitempty"`
+	DependsOn       []string           `yaml:"depends_on,omitempty"`
+	Restart         *benchRestartOut   `yaml:"restart,omitempty"`
 	Readiness       *benchReadinessOut `yaml:"readiness,omitempty"`
-	Labels          map[string]string `yaml:"labels,omitempty"`
-	StopSignal      string            `yaml:"stop_signal,omitempty"`
-	ShutdownTimeout string            `yaml:"shutdown_timeout,omitempty"`
+	Labels          map[string]string  `yaml:"labels,omitempty"`
+	StopSignal      string             `yaml:"stop_signal,omitempty"`
+	ShutdownTimeout string             `yaml:"shutdown_timeout,omitempty"`
 }
 
 type benchContainerOut struct {
