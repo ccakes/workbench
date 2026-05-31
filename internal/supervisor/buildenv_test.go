@@ -70,8 +70,10 @@ func tracingCfg(svc config.ServiceConfig) *config.Config {
 // TestOTEL_InjectsDefaultsWhenUnset verifies the collector endpoint/protocol
 // defaults are injected when tracing is on and nothing else sets them.
 func TestOTEL_InjectsDefaultsWhenUnset(t *testing.T) {
+	// A container service reaches the host collector via host.docker.internal,
+	// not its own loopback.
 	env := buildEnvForService(t, tracingCfg(containerService()), "svc")
-	if got, want := env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://localhost:4318"; got != want {
+	if got, want := env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://host.docker.internal:4318"; got != want {
 		t.Errorf("endpoint = %q, want %q", got, want)
 	}
 	if got, want := env["OTEL_EXPORTER_OTLP_PROTOCOL"], "http/protobuf"; got != want {

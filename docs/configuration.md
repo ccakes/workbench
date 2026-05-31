@@ -44,16 +44,16 @@ references in any service's inline env — you do not need to source the .env
 file into your shell first — but a value exported in your shell overrides the
 same key from config or env files.
 
-For `env_file` *path* fields, only the parent shell environment is consulted
+For `env_file` _path_ fields, only the parent shell environment is consulted
 (the file's own contents can't resolve its own path).
 
 ```yaml
 services:
   api:
     env:
-      DB_PASS: ${DATABASE_PASSWORD}      # shell wins, then service/global env files
+      DB_PASS: ${DATABASE_PASSWORD} # shell wins, then service/global env files
       TOKEN_PREFIX: "tok-${ENVIRONMENT}" # can refer to another inline env key
-    command: "./bin/api --pw $DB_PASS"   # NOT expanded; runs through the shell
+    command: "./bin/api --pw $DB_PASS" # NOT expanded; runs through the shell
 ```
 
 If a referenced variable is unset in every layer, it expands to the empty
@@ -74,55 +74,61 @@ Run `bench validate` to surface these errors without starting any services.
 
 ### Root
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `version` | integer | yes | Config version, must be `1` |
-| `extends` | path | no | Path to a parent config file to inherit from. See [Composition](#composition-with-extends) |
-| `global` | object | no | Global settings |
-| `services` | map | yes | Service definitions (key = service ID) |
+| Field      | Type    | Required | Description                                                                                |
+| ---------- | ------- | -------- | ------------------------------------------------------------------------------------------ |
+| `version`  | integer | yes      | Config version, must be `1`                                                                |
+| `extends`  | path    | no       | Path to a parent config file to inherit from. See [Composition](#composition-with-extends) |
+| `global`   | object  | no       | Global settings                                                                            |
+| `services` | map     | yes      | Service definitions (key = service ID)                                                     |
 
 ### Global
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `shutdown_timeout` | duration | `10s` | Time to wait for graceful stop before SIGKILL |
-| `log_buffer_lines` | integer | `5000` | Max log lines kept per service |
-| `watch_debounce` | duration | `300ms` | Default debounce for file watchers |
-| `env` | map | | Global environment variables applied to all services |
-| `env_file` | path | | Global .env file loaded for all services |
-| `container_prefix` | string | dirname | Prefix for Docker container names (e.g. `{prefix}-{service}`) |
-| `tracing` | object | | Tracing configuration |
+| Field              | Type     | Default | Description                                                   |
+| ------------------ | -------- | ------- | ------------------------------------------------------------- |
+| `shutdown_timeout` | duration | `10s`   | Time to wait for graceful stop before SIGKILL                 |
+| `log_buffer_lines` | integer  | `5000`  | Max log lines kept per service                                |
+| `watch_debounce`   | duration | `300ms` | Default debounce for file watchers                            |
+| `env`              | map      |         | Global environment variables applied to all services          |
+| `env_file`         | path     |         | Global .env file loaded for all services                      |
+| `container_prefix` | string   | dirname | Prefix for Docker container names (e.g. `{prefix}-{service}`) |
+| `tracing`          | object   |         | Tracing configuration                                         |
 
 #### Tracing
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable embedded OTLP trace collector |
-| `port` | integer | `4318` | HTTP port for the OTLP collector |
-| `buffer_size` | byte size | `500MB` | Max memory for stored spans |
+| Field         | Type      | Default | Description                          |
+| ------------- | --------- | ------- | ------------------------------------ |
+| `enabled`     | bool      | `false` | Enable embedded OTLP trace collector |
+| `port`        | integer   | `4318`  | HTTP port for the OTLP collector     |
+| `buffer_size` | byte size | `500MB` | Max memory for stored spans          |
 
 When enabled, workbench starts an OTLP HTTP collector on the configured port. Services that export traces to `http://localhost:<port>/v1/traces` will have their spans captured and viewable in the TUI trace browser (press `t`).
+
+The collector follows OTLP/HTTP content negotiation: it accepts protobuf
+(`application/x-protobuf`) and JSON (`application/json`) payloads, and
+decompresses bodies sent with `Content-Encoding: gzip`. Exporters may use their
+default protocol and compression — no special configuration is required beyond
+the endpoint.
 
 Byte sizes use human-readable format: `100MB`, `1GB`, etc.
 
 ### Service
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | string | key | Display name shown in TUI |
-| `dir` | path | **required**\* | Working directory for the process |
-| `command` | string or string[] | **required**\* | Command to execute |
-| `container` | object | | Container configuration (see below) |
-| `env` | map | | Inline environment variables |
-| `env_file` | path | | Path to .env file |
-| `auto_start` | bool | `true` | Start automatically with `bench up` |
-| `depends_on` | string[] | | Services that must reach Running before this one starts (see [Dependency ordering](#dependency-ordering)) |
-| `restart` | object | | Restart policy configuration |
-| `watch` | object | | File watch configuration |
-| `readiness` | object | | Readiness detection |
-| `labels` | map | | Arbitrary key-value labels |
-| `stop_signal` | string | `SIGTERM` | Signal sent on stop |
-| `shutdown_timeout` | duration | global | Override global shutdown timeout |
+| Field              | Type               | Default        | Description                                                                                               |
+| ------------------ | ------------------ | -------------- | --------------------------------------------------------------------------------------------------------- |
+| `name`             | string             | key            | Display name shown in TUI                                                                                 |
+| `dir`              | path               | **required**\* | Working directory for the process                                                                         |
+| `command`          | string or string[] | **required**\* | Command to execute                                                                                        |
+| `container`        | object             |                | Container configuration (see below)                                                                       |
+| `env`              | map                |                | Inline environment variables                                                                              |
+| `env_file`         | path               |                | Path to .env file                                                                                         |
+| `auto_start`       | bool               | `true`         | Start automatically with `bench up`                                                                       |
+| `depends_on`       | string[]           |                | Services that must reach Running before this one starts (see [Dependency ordering](#dependency-ordering)) |
+| `restart`          | object             |                | Restart policy configuration                                                                              |
+| `watch`            | object             |                | File watch configuration                                                                                  |
+| `readiness`        | object             |                | Readiness detection                                                                                       |
+| `labels`           | map                |                | Arbitrary key-value labels                                                                                |
+| `stop_signal`      | string             | `SIGTERM`      | Signal sent on stop                                                                                       |
+| `shutdown_timeout` | duration           | global         | Override global shutdown timeout                                                                          |
 
 \* `dir` and `command` are required for process-based services. For container-based services, use the `container` field instead.
 
@@ -131,11 +137,13 @@ A service is either **process-based** (has `command`) or **container-based** (ha
 #### Command formats
 
 String form (runs via `sh -c`):
+
 ```yaml
 command: go run ./cmd/api
 ```
 
 Array form (exec directly):
+
 ```yaml
 command:
   - npm
@@ -145,13 +153,13 @@ command:
 
 ### Container
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `image` | string | **required** | Docker image to run |
-| `ports` | string[] | | Port mappings (`host:container` or `host_ip:host:container`) |
-| `volumes` | string[] | | Volume mounts (`host:container`). Relative host paths resolve from config file directory |
-| `network` | string | | Docker network to connect to |
-| `command` | string or string[] | | Override container entrypoint/command |
+| Field     | Type               | Default      | Description                                                                              |
+| --------- | ------------------ | ------------ | ---------------------------------------------------------------------------------------- |
+| `image`   | string             | **required** | Docker image to run                                                                      |
+| `ports`   | string[]           |              | Port mappings (`host:container` or `host_ip:host:container`)                             |
+| `volumes` | string[]           |              | Volume mounts (`host:container`). Relative host paths resolve from config file directory |
+| `network` | string             |              | Docker network to connect to                                                             |
+| `command` | string or string[] |              | Override container entrypoint/command                                                    |
 
 Container services are managed via Docker. workbench handles the full lifecycle: pulling, starting, log streaming, and cleanup. Environment variables from `env` and `env_file` are passed to the container via `-e` flags. Containers are named `{container_prefix}-{service_key}` — see the `container_prefix` global setting.
 
@@ -177,27 +185,28 @@ services:
 
 ### Restart
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `policy` | string | `never` | `never`, `on-failure`, or `always` |
-| `max_retries` | integer | unlimited | Max consecutive restart attempts |
-| `backoff` | duration | `1s` | Delay between restarts |
+| Field         | Type     | Default   | Description                        |
+| ------------- | -------- | --------- | ---------------------------------- |
+| `policy`      | string   | `never`   | `never`, `on-failure`, or `always` |
+| `max_retries` | integer  | unlimited | Max consecutive restart attempts   |
+| `backoff`     | duration | `1s`      | Delay between restarts             |
 
 **Policies:**
+
 - `never` — process exits and stays stopped
 - `on-failure` — restart only on non-zero exit code
 - `always` — restart regardless of exit code
 
 ### Watch
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable file watching |
-| `paths` | string[] | `["."]` | Directories to watch (relative to service dir) |
-| `include` | glob[] | | Only trigger on matching files |
-| `ignore` | glob[] | | Skip matching files |
-| `debounce` | duration | global | Debounce window for changes |
-| `restart` | bool | `true` | Restart service on matching changes |
+| Field      | Type     | Default | Description                                    |
+| ---------- | -------- | ------- | ---------------------------------------------- |
+| `enabled`  | bool     | `false` | Enable file watching                           |
+| `paths`    | string[] | `["."]` | Directories to watch (relative to service dir) |
+| `include`  | glob[]   |         | Only trigger on matching files                 |
+| `ignore`   | glob[]   |         | Skip matching files                            |
+| `debounce` | duration | global  | Debounce window for changes                    |
+| `restart`  | bool     | `true`  | Restart service on matching changes            |
 
 Glob patterns use doublestar syntax: `**/*.go`, `src/**/*.ts`, etc.
 
@@ -205,19 +214,19 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 
 ### Readiness
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `kind` | string | `none`, `log_pattern`, `tcp`, `http`, `exec`, or `grpc` |
-| `pattern` | string | Go regular expression matched against log lines (for `log_pattern`) |
-| `address` | string | TCP address to dial, `host:port` (for `tcp` and `grpc`) |
-| `url` | string | HTTP URL to GET; any 2xx response means ready (for `http`) |
-| `command` | string or list | Shell command or argv to run (for `exec`); exit 0 = ready |
-| `service` | string | gRPC service name (for `grpc`); empty = overall server health |
-| `timeout` | duration | Per-attempt probe timeout (default `2s`) |
-| `initial_delay` | duration | Delay before the first probe attempt |
-| `interval` | duration | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
-| `max_attempts` | integer | Cap on probe attempts before giving up (default `0` = unlimited) |
-| `settle` | duration | Delay between probe-success and the Ready transition |
+| Field           | Type           | Description                                                                       |
+| --------------- | -------------- | --------------------------------------------------------------------------------- |
+| `kind`          | string         | `none`, `log_pattern`, `tcp`, `http`, `exec`, or `grpc`                           |
+| `pattern`       | string         | Go regular expression matched against log lines (for `log_pattern`)               |
+| `address`       | string         | TCP address to dial, `host:port` (for `tcp` and `grpc`)                           |
+| `url`           | string         | HTTP URL to GET; any 2xx response means ready (for `http`)                        |
+| `command`       | string or list | Shell command or argv to run (for `exec`); exit 0 = ready                         |
+| `service`       | string         | gRPC service name (for `grpc`); empty = overall server health                     |
+| `timeout`       | duration       | Per-attempt probe timeout (default `2s`)                                          |
+| `initial_delay` | duration       | Delay before the first probe attempt                                              |
+| `interval`      | duration       | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
+| `max_attempts`  | integer        | Cap on probe attempts before giving up (default `0` = unlimited)                  |
+| `settle`        | duration       | Delay between probe-success and the Ready transition                              |
 
 Every service transitions `Starting → Running → Ready`. Services without a
 probe are promoted to **Ready** immediately once the process is up — so
@@ -259,7 +268,7 @@ launched when `bench up --profile <name>` activates at least one of them.
 
 ```yaml
 services:
-  postgres: {}             # always-on
+  postgres: {} # always-on
   flagman:
     profiles: [core]
   portal:
@@ -290,11 +299,11 @@ passes (and after any `settle` delay), before the service transitions to
 bootstrap that's logically part of bringing this service up — creating a dev
 environment in a flag service, seeding a default DB user, applying migrations.
 
-| Field | Type | Description |
-|-------|------|-------------|
+| Field     | Type           | Description                                            |
+| --------- | -------------- | ------------------------------------------------------ |
 | `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded |
-| `timeout` | duration | Cap on setup runtime (default `60s`) |
-| `env` | map | Extra env applied on top of the service's env |
+| `timeout` | duration       | Cap on setup runtime (default `60s`)                   |
+| `env`     | map            | Extra env applied on top of the service's env          |
 
 ```yaml
 services:
@@ -350,7 +359,7 @@ services:
 ### Rules
 
 - **Single parent.** `extends:` is a single path, not a list. Chains are allowed (`a.yml` extends `b.yml` extends `c.yml`); cycles are rejected at load time.
-- **Path resolution is per-file.** `extends:` and any relative paths in a config (`dir`, `env_file`, container volumes) are resolved against the directory of *that* file. A parent in `bench/core.yml` with `dir: ./svc` resolves to `bench/svc`, regardless of where the child config lives.
+- **Path resolution is per-file.** `extends:` and any relative paths in a config (`dir`, `env_file`, container volumes) are resolved against the directory of _that_ file. A parent in `bench/core.yml` with `dir: ./svc` resolves to `bench/svc`, regardless of where the child config lives.
 - **Service name conflicts are an error.** If both child and parent define a service with the same name, loading fails. To customise a parent service, change the parent or rename one of them.
 - **Global `env`: per-key merge.** Parent env vars are inherited; the child can add keys or override individual ones.
 - **Global scalars (`log_buffer_lines`, `shutdown_timeout`, `container_prefix`, …): child wins when set.** If the child omits a field, the parent's value is used; otherwise the default applies.
@@ -375,7 +384,7 @@ Edge cases:
 - **Dependency fails or stops before becoming Running** — the dependent is
   marked Failed and does not start. The failure reason references the dep.
 - **Dependency has `auto_start: false`** — treated as opt-out; the dependent
-  does *not* wait (otherwise it would deadlock). Manually starting the
+  does _not_ wait (otherwise it would deadlock). Manually starting the
   dependent via `bench start` will still wait for any still-Pending deps to
   become Running.
 - **Dependency dies after the dependent is already Running** — the dependent
@@ -396,8 +405,7 @@ Environment variables are loaded in this order (later overrides earlier):
 
 The OTEL tracing defaults are the lowest-precedence source: when
 `global.tracing.enabled` is true, workbench injects
-`OTEL_EXPORTER_OTLP_ENDPOINT` (pointing at the embedded collector) and
-`OTEL_EXPORTER_OTLP_PROTOCOL` **only** if neither is already set by any other
+variables but they can be overwritten by any other
 layer — so a value from your shell, `global.env_file`, a service `env_file`, or
 inline `env` always wins.
 

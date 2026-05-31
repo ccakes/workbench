@@ -36,8 +36,12 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 	cleanup := exec.Command("docker", "rm", "-f", "-v", r.name)
 	_ = cleanup.Run() // ignore errors — container may not exist
 
-	// Build docker run args
-	args := []string{"run", "-d", "--name", r.name, "--label", "managed-by=bench"}
+	// Build docker run args. host-gateway maps host.docker.internal to the
+	// host so containers can reach host-side services (e.g. the OTLP trace
+	// collector). Some runtimes provide this alias automatically; adding it
+	// explicitly makes it portable to plain Docker on Linux.
+	args := []string{"run", "-d", "--name", r.name, "--label", "managed-by=bench",
+		"--add-host", "host.docker.internal:host-gateway"}
 
 	// Environment variables from env slice (already merged by supervisor)
 	for _, e := range env {

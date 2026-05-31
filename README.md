@@ -112,12 +112,12 @@ Workbench includes an embedded OTLP HTTP trace collector. Enable it and your ser
 ```yaml
 global:
   tracing:
-    enabled: true        # default: false
-    port: 4318           # default: 4318
-    buffer_size: 500MB   # default: 500MB, supports B/KB/MB/GB
+    enabled: true # default: false
+    port: 4318 # default: 4318
+    buffer_size: 500MB # default: 500MB, supports B/KB/MB/GB
 ```
 
-Point your services' OTLP exporter at `http://localhost:4318/v1/traces` using any OpenTelemetry SDK.
+Workbench injects `OTEL_EXPORTER_OTLP_ENDPOINT` for you when tracing is enabled — `http://localhost:4318` for host-process services and `http://host.docker.internal:4318` for container services, which reach the host collector via a `host.docker.internal:host-gateway` alias added to each container.
 
 ### Trace Browser
 
@@ -129,68 +129,68 @@ Press `t` in the TUI to open the trace browser, which has three views:
 
 **Service Map** — Press `m` to see the service interaction graph showing call counts, average durations, and error counts between services.
 
-| Key | Action |
-|-----|--------|
-| `t` | Toggle trace browser |
-| `j` / `k` | Navigate spans |
-| `Tab` | Switch list / detail panes |
-| `Enter` | Open waterfall for selected trace |
+| Key             | Action                            |
+| --------------- | --------------------------------- |
+| `t`             | Toggle trace browser              |
+| `j` / `k`       | Navigate spans                    |
+| `Tab`           | Switch list / detail panes        |
+| `Enter`         | Open waterfall for selected trace |
 | `1` / `2` / `3` | Sort by time / duration / service |
-| `/` | Filter spans |
-| `m` | Show service map |
-| `Esc` | Back to previous view |
+| `/`             | Filter spans                      |
+| `m`             | Show service map                  |
+| `Esc`           | Back to previous view             |
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `bench` or `bench up` | Start services and open TUI |
-| `bench start <svc...>` | Start specific services |
-| `bench stop <svc...>` | Stop specific services |
-| `bench restart <svc...>` | Restart specific services |
-| `bench status` | Show service status table |
-| `bench logs [svc]` | Stream service logs |
-| `bench validate` | Validate config without running |
-| `bench version` | Show version |
+| Command                  | Description                     |
+| ------------------------ | ------------------------------- |
+| `bench` or `bench up`    | Start services and open TUI     |
+| `bench start <svc...>`   | Start specific services         |
+| `bench stop <svc...>`    | Stop specific services          |
+| `bench restart <svc...>` | Restart specific services       |
+| `bench status`           | Show service status table       |
+| `bench logs [svc]`       | Stream service logs             |
+| `bench validate`         | Validate config without running |
+| `bench version`          | Show version                    |
 
 ### Global flags
 
-| Flag | Description |
-|------|-------------|
+| Flag              | Description                                              |
+| ----------------- | -------------------------------------------------------- |
 | `--config <path>` | Path to config file (default: auto-discover `bench.yml`) |
-| `--no-tui` | Run without TUI (headless mode) |
-| `--no-watch` | Disable file watching |
-| `--verbose` | Verbose output |
+| `--no-tui`        | Run without TUI (headless mode)                          |
+| `--no-watch`      | Disable file watching                                    |
+| `--verbose`       | Verbose output                                           |
 
 ## TUI Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Navigate services / scroll logs |
-| `Tab` | Switch between service list and log pane |
-| `r` | Restart selected service |
-| `s` | Stop selected service |
-| `S` | Start selected service |
-| `w` | Toggle file watch for selected service |
-| `f` | Toggle log follow mode |
-| `c` | Clear log pane |
-| `a` | Toggle all-services log view |
-| `g` / `G` | Scroll to top / bottom of logs |
-| `/` | Search/filter logs |
-| `?` | Show help |
-| `q` | Quit |
+| Key       | Action                                   |
+| --------- | ---------------------------------------- |
+| `j` / `k` | Navigate services / scroll logs          |
+| `Tab`     | Switch between service list and log pane |
+| `r`       | Restart selected service                 |
+| `s`       | Stop selected service                    |
+| `S`       | Start selected service                   |
+| `w`       | Toggle file watch for selected service   |
+| `f`       | Toggle log follow mode                   |
+| `c`       | Clear log pane                           |
+| `a`       | Toggle all-services log view             |
+| `g` / `G` | Scroll to top / bottom of logs           |
+| `/`       | Search/filter logs                       |
+| `?`       | Show help                                |
+| `q`       | Quit                                     |
 
 ## Comparison with Procfile tools
 
-| Feature | workbench | Overmind | foreman |
-|---------|-----------|----------|---------|
-| Config format | YAML | Procfile | Procfile |
-| File watching | Built-in | No | No |
-| TUI | Built-in | tmux-based | No |
-| Per-service env files | Yes | Yes | Yes |
-| Restart policies | Yes | No | No |
-| Dependency ordering | Yes | No | No |
-| Working directory per service | Yes | No | No |
+| Feature                       | workbench | Overmind   | foreman  |
+| ----------------------------- | --------- | ---------- | -------- |
+| Config format                 | YAML      | Procfile   | Procfile |
+| File watching                 | Built-in  | No         | No       |
+| TUI                           | Built-in  | tmux-based | No       |
+| Per-service env files         | Yes       | Yes        | Yes      |
+| Restart policies              | Yes       | No         | No       |
+| Dependency ordering           | Yes       | No         | No       |
+| Working directory per service | Yes       | No         | No       |
 
 ## Agent Skill
 

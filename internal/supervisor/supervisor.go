@@ -679,8 +679,16 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 			}
 			return false
 		}
+		// The collector listens on the host. Host-process services reach it
+		// via localhost, but container services have their own loopback, so
+		// they must reach the host collector via host.docker.internal (added
+		// to container runs as a host-gateway alias by the container runner).
+		otelHost := "localhost"
+		if ms.cfg.IsContainer() {
+			otelHost = "host.docker.internal"
+		}
 		if !alreadySet("OTEL_EXPORTER_OTLP_ENDPOINT") {
-			env = append(env, fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:%d", port))
+			env = append(env, fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d", otelHost, port))
 		}
 		if !alreadySet("OTEL_EXPORTER_OTLP_PROTOCOL") {
 			env = append(env, "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf")

@@ -112,6 +112,26 @@ dependency cycle detected: a -> b -> c -> a
 
 Remove one of the circular dependencies.
 
+### No spans from a containerized service
+
+If tracing is enabled and host-process services show up in the trace browser but
+a **container** service produces nothing, check the endpoint the service is
+actually exporting to. A container's `localhost` is its own loopback, not the
+host — so `http://localhost:<port>` silently fails with connection-refused.
+
+Workbench injects `http://host.docker.internal:<port>` for container services
+and adds a `host.docker.internal:host-gateway` alias to each container run. If
+spans still don't arrive:
+
+- Confirm the service didn't override `OTEL_EXPORTER_OTLP_ENDPOINT` itself (any
+  env layer outranks the injected default — see `docs/configuration.md`). A
+  hardcoded `localhost` in the service's own config is the usual culprit.
+- Verify the container can reach the host collector:
+  ```bash
+  docker exec <container> getent hosts host.docker.internal
+  ```
+- Confirm the collector is listening on the host: `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
+
 ## Getting debug output
 
 Run with `--verbose` and `--no-tui` for detailed event logging:
