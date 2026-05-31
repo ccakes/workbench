@@ -2,10 +2,12 @@ package collector
 
 import (
 	"bytes"
+	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	colpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -135,6 +137,76 @@ func TestCollector_PostValidProtobuf(t *testing.T) {
 		}
 	default:
 		t.Error("expected SpanBatchReceived event on bus")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST gzip-compressed protobuf (Content-Encoding: gzip)
+// ---------------------------------------------------------------------------
+
+func TestCollector_PostGzipProtobuf(t *testing.T) {
+	c, server := setupCollector(t)
+	defer server.Close()
+
+	body, err := proto.Marshal(buildExportRequest("gz-service", "GET /gz"))
+	if err != nil {
+		t.Fatalf("failed to marshal protobuf: %v", err)
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		t.Fatalf("gzip write failed: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close failed: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/traces", &buf)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := c.store.Len(); got != 1 {
+		t.Errorf("store.Len() = %d, want 1", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST JSON (Content-Type: application/json), optionally gzip-compressed
+// ---------------------------------------------------------------------------
+
+func TestCollector_PostJSON(t *testing.T) {
+	c, server := setupCollector(t)
+	defer server.Close()
+
+	body, err := protojson.Marshal(buildExportRequest("json-service", "GET /json"))
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/v1/traces", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := c.store.Len(); got != 1 {
+		t.Errorf("store.Len() = %d, want 1", got)
 	}
 }
 

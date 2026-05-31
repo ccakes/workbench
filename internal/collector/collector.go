@@ -1,13 +1,16 @@
 package collector
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	colpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -74,15 +77,39 @@ func (c *Collector) handleTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 16*1024*1024)) // 16MB max
+	// OTLP/HTTP clients may compress the body and signal it via
+	// Content-Encoding (gzip is the only encoding the spec defines). Honour
+	// the header so compressed exports — which several SDKs send by default,
+	// including the Perl OTLP exporter — aren't rejected as malformed.
+	var reader io.Reader = r.Body
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Encoding")), "gzip") {
+		gz, err := gzip.NewReader(r.Body)
+		if err != nil {
+			http.Error(w, "failed to open gzip reader", http.StatusBadRequest)
+			return
+		}
+		defer func() { _ = gz.Close() }()
+		reader = gz
+	}
+
+	body, err := io.ReadAll(io.LimitReader(reader, 16*1024*1024)) // 16MB max (decompressed)
 	defer func() { _ = r.Body.Close() }()
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
 
+	// Decode per Content-Type. OTLP/HTTP defines protobuf
+	// (application/x-protobuf) and JSON (application/json) payloads; protobuf
+	// is the default when the header is absent or unrecognised.
 	req := &colpb.ExportTraceServiceRequest{}
-	if err := proto.Unmarshal(body, req); err != nil {
+	contentType := r.Header.Get("Content-Type")
+	if strings.Contains(contentType, "json") {
+		if err := protojson.Unmarshal(body, req); err != nil {
+			http.Error(w, "failed to decode JSON", http.StatusBadRequest)
+			return
+		}
+	} else if err := proto.Unmarshal(body, req); err != nil {
 		http.Error(w, "failed to decode protobuf", http.StatusBadRequest)
 		return
 	}
