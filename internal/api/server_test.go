@@ -878,6 +878,64 @@ func TestDown(t *testing.T) {
 	}
 }
 
+func TestSubscribeReceivesEvents(t *testing.T) {
+	_, client, sup := setupServer(t)
+
+	ch, stop, err := client.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer stop()
+
+	sup.Bus().Publish(events.Event{
+		Type:    events.LogLine,
+		Service: "web",
+		Data:    events.LogLineData{Stream: events.StreamStdout, Line: "hello"},
+	})
+
+	select {
+	case evt, ok := <-ch:
+		if !ok {
+			t.Fatal("stream closed unexpectedly")
+		}
+		if evt.Type != events.LogLine || evt.Service != "web" {
+			t.Fatalf("unexpected event: %+v", evt)
+		}
+		d, ok := evt.Data.(events.LogLineData)
+		if !ok || d.Line != "hello" {
+			t.Fatalf("unexpected log data: %+v", evt.Data)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for streamed event")
+	}
+}
+
+func TestSubscribeSingleClient(t *testing.T) {
+	srv, client, _ := setupServer(t)
+
+	ch1, stop1, err := client.Subscribe()
+	if err != nil {
+		t.Fatalf("first subscribe: %v", err)
+	}
+
+	// A second subscribe must be rejected while the first holds the stream.
+	if _, _, err := client.Subscribe(); err == nil {
+		t.Fatal("expected second subscribe to be rejected")
+	}
+
+	// After the first disconnects, the slot frees and a new subscribe succeeds.
+	stop1()
+	<-ch1 // drain until closed so the server-side handler returns
+	pollUntil(t, 2*time.Second, 20*time.Millisecond, func() bool { return !srv.attached.Load() })
+
+	ch2, stop2, err := client.Subscribe()
+	if err != nil {
+		t.Fatalf("re-subscribe after release: %v", err)
+	}
+	stop2()
+	_ = ch2
+}
+
 func pollUntil(t *testing.T, timeout, interval time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.After(timeout)

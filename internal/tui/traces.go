@@ -53,7 +53,7 @@ func (m Model) handleTraceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		spans := m.filteredSpans()
 		if m.traceSelected >= 0 && m.traceSelected < len(spans) {
 			s := spans[m.traceSelected]
-			m.waterfallSpans = m.store.SpansByTrace(s.TraceID)
+			m.waterfallSpans = m.session.SpansByTrace(s.TraceID)
 			m.waterfallMode = true
 		}
 
@@ -347,10 +347,9 @@ func (m Model) viewTraceStatusBar() string {
 	bar := " " + strings.Join(parts, "  ")
 
 	// Show buffer stats
-	if m.store != nil {
-		stats := fmt.Sprintf(" | spans:%d buf:%s",
-			m.store.Len(),
-			formatBytes(m.store.BytesUsed()))
+	if m.session.HasTracing() {
+		spans, bytes := m.session.TraceStats()
+		stats := fmt.Sprintf(" | spans:%d buf:%s", spans, formatBytes(bytes))
 		bar += styleLabel.Render(stats)
 	}
 

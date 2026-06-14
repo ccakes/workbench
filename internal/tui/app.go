@@ -15,7 +15,6 @@ import (
 	"github.com/ccakes/workbench/internal/logbuf"
 	"github.com/ccakes/workbench/internal/service"
 	"github.com/ccakes/workbench/internal/spanbuf"
-	"github.com/ccakes/workbench/internal/supervisor"
 )
 
 func sortStrings(s []string) { sort.Strings(s) }
@@ -34,9 +33,8 @@ const (
 const logScrollStepX = 8
 
 type Model struct {
-	sup      *supervisor.Supervisor
-	store    *spanbuf.Store
-	eventCh  chan events.Event
+	session  Session
+	eventCh  <-chan events.Event
 	services []string
 
 	selected   int
@@ -71,13 +69,11 @@ type Model struct {
 type eventMsg events.Event
 type tickMsg time.Time
 
-func NewModel(sup *supervisor.Supervisor, store *spanbuf.Store) Model {
-	ch := sup.Bus().Subscribe(256)
+func NewModel(session Session) Model {
 	return Model{
-		sup:       sup,
-		store:     store,
-		eventCh:   ch,
-		services:  sup.ServiceKeys(),
+		session:   session,
+		eventCh:   session.Events(),
+		services:  session.Keys(),
 		logFollow: true,
 	}
 }
@@ -232,22 +228,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		if key := m.selectedKey(); key != "" {
-			_ = m.sup.RestartService(key, "manual restart")
+			_ = m.session.RestartService(key, "manual restart")
 		}
 
 	case "s":
 		if key := m.selectedKey(); key != "" {
-			go func() { _ = m.sup.StopService(key) }()
+			session := m.session
+			go func() { _ = session.StopService(key) }()
 		}
 
 	case "S":
 		if key := m.selectedKey(); key != "" {
-			_ = m.sup.StartService(key)
+			_ = m.session.StartService(key)
 		}
 
 	case "w":
 		if key := m.selectedKey(); key != "" {
-			m.sup.ToggleWatch(key)
+			m.session.ToggleWatch(key)
 		}
 
 	case "f":
@@ -258,9 +255,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "c":
 		if key := m.selectedKey(); key != "" {
-			if logs := m.sup.ServiceLogs(key); logs != nil {
-				logs.Clear()
-			}
+			m.session.ClearLogs(key)
 		}
 
 	case "a":
@@ -282,7 +277,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logOffset = maxOffset
 
 	case "t":
-		if m.store != nil {
+		if m.session.HasTracing() {
 			m.viewMode = viewModeTraces
 			m.traceSelected = 0
 			m.tracePane = 0
@@ -297,10 +292,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) refreshTraceSpans() {
-	if m.store == nil {
+	if !m.session.HasTracing() {
 		return
 	}
-	m.traceSpans = m.store.Spans()
+	m.traceSpans = m.session.Spans()
 }
 
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -351,7 +346,7 @@ func (m Model) selectedKey() string {
 func (m Model) displayOrder() []string {
 	useGroups := false
 	for _, key := range m.services {
-		if cfg := m.sup.ServiceConfig(key); cfg != nil && cfg.Group != "" {
+		if cfg := m.session.Config(key); cfg != nil && cfg.Group != "" {
 			useGroups = true
 			break
 		}
@@ -365,7 +360,7 @@ func (m Model) displayOrder() []string {
 	var ungrouped []string
 	for _, key := range m.services {
 		var groupName string
-		if cfg := m.sup.ServiceConfig(key); cfg != nil {
+		if cfg := m.session.Config(key); cfg != nil {
 			groupName = cfg.Group
 		}
 		if groupName == "" {
@@ -472,7 +467,7 @@ func (m Model) viewServiceList(width, height int) string {
 	// `group:` field set — otherwise the list looks like it did before.
 	useGroups := false
 	for _, key := range order {
-		if cfg := m.sup.ServiceConfig(key); cfg != nil && cfg.Group != "" {
+		if cfg := m.session.Config(key); cfg != nil && cfg.Group != "" {
 			useGroups = true
 			break
 		}
@@ -492,11 +487,10 @@ func (m Model) viewServiceList(width, height int) string {
 		if rendered >= height-1 {
 			return false
 		}
-		info := m.sup.ServiceInfo(key)
-		if info == nil {
+		snap, ok := m.session.Info(key)
+		if !ok {
 			return true
 		}
-		snap := info.Snapshot()
 		indicator := statusIndicator(snap.Status.String())
 		name := snap.Name()
 		status := snap.Status.String()
@@ -548,7 +542,7 @@ func (m Model) viewServiceList(width, height int) string {
 	ungroupedHeaderEmitted := false
 	for i, key := range order {
 		var groupName string
-		if cfg := m.sup.ServiceConfig(key); cfg != nil {
+		if cfg := m.session.Config(key); cfg != nil {
 			groupName = cfg.Group
 		}
 		if groupName == "" {
@@ -577,12 +571,11 @@ func (m Model) viewDetail(width, height int) string {
 		return styleLabel.Render("no service selected")
 	}
 
-	info := m.sup.ServiceInfo(key)
-	if info == nil {
+	snap, ok := m.session.Info(key)
+	if !ok {
 		return ""
 	}
-	snap := info.Snapshot()
-	svcCfg := m.sup.ServiceConfig(key)
+	svcCfg := m.session.Config(key)
 
 	var rows []string
 	title := styleTitle.Render(snap.Name()) + " " + statusStyle(snap.Status.String()).Render(snap.Status.String())
@@ -716,7 +709,7 @@ func (m Model) currentLogLines() []logbuf.Line {
 	if m.allLogs {
 		// Merge logs from all services
 		for _, k := range m.services {
-			logs := m.sup.ServiceLogs(k)
+			logs := m.session.Logs(k)
 			if logs != nil {
 				lines = append(lines, logs.Lines()...)
 			}
@@ -728,7 +721,7 @@ func (m Model) currentLogLines() []logbuf.Line {
 			}
 		}
 	} else {
-		logs := m.sup.ServiceLogs(key)
+		logs := m.session.Logs(key)
 		if logs != nil {
 			lines = logs.Lines()
 		}
@@ -835,7 +828,7 @@ func (m Model) viewStatusBar() string {
 		{"f", "follow"},
 		{"/", "search"},
 	}
-	if m.store != nil {
+	if m.session.HasTracing() {
 		keys = append(keys, struct{ key, desc string }{"t", "traces"})
 	}
 	keys = append(keys,
@@ -892,7 +885,7 @@ func (m Model) viewHelp() string {
 		{"G", "Scroll to bottom of logs (follow)"},
 		{"/", "Search/filter logs"},
 	}
-	if m.store != nil {
+	if m.session.HasTracing() {
 		bindings = append(bindings, struct{ key, desc string }{"t", "Open trace browser"})
 	}
 	bindings = append(bindings,

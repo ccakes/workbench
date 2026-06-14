@@ -61,7 +61,14 @@ Per-service file watcher using fsnotify. For each watched service:
 
 ### TUI (`internal/tui/`)
 
-Built on bubbletea (Elm-architecture). The model subscribes to the event bus and re-renders on events and a 1-second tick (for uptime display).
+Built on bubbletea (Elm-architecture). The model subscribes to an event channel and re-renders on events and a 1-second tick (for uptime display).
+
+The model talks to a `Session` rather than to the supervisor directly. Two implementations back it:
+
+- `localSession` — a passthrough over an in-process supervisor + span store, used by foreground `bench up`.
+- `remoteSession` — an `api.Client`-backed client used when attaching to a detached daemon over the control socket. It opens the streaming `subscribe` endpoint, mirrors the daemon's state into local caches (snapshots, per-service log buffers, spans) kept fresh by the stream, and serves the model's render-time reads from those caches so they never block on the socket.
+
+Because both go through `Session`, the model code is identical in both modes.
 
 Layout:
 - Left pane: service list with status indicators
@@ -70,13 +77,24 @@ Layout:
 
 ### Control API (`internal/api/`)
 
-Unix domain socket server started by `bench up`. Exposes a JSON request-per-connection protocol for querying and controlling the running instance. CLI subcommands (`bench status`, `bench start`, `bench stop`, etc.) connect to this socket instead of creating standalone supervisors.
+Unix domain socket server started by the session host. Exposes a JSON request-per-connection protocol for querying and controlling the running instance. CLI subcommands (`bench status`, `bench start`, `bench stop`, `bench down`, etc.) connect to this socket instead of creating standalone supervisors.
+
+There is also a long-lived `subscribe` stream: a client holds the connection open and the server pushes bus events (state changes, log lines, span batches) as newline-delimited JSON. This drives the attached TUI. Only **one** interactive client may hold the subscribe stream at a time (a second is rejected); ordinary request/response control commands remain multi-client.
 
 Socket path is derived deterministically from the config file path (`SHA256(abs_path)[:8]` → `/tmp/bench-<hash>.sock`), so the client auto-discovers the running instance. See [Control API docs](control-api.md) for the full protocol.
 
 ### CLI (`internal/cli/`)
 
-Subcommand dispatch using stdlib `flag`. Each command creates its own FlagSet. The `up` command wires together config, supervisor, watcher, collector, API server, and TUI. Other subcommands connect to the running instance via the control socket.
+Subcommand dispatch using stdlib `flag`. Each command creates its own FlagSet.
+
+Session model (see also [Control API docs](control-api.md)):
+
+- `bench up` — foreground: wires together config, supervisor, watcher, collector, API server, and an in-process TUI (`localSession`). Unchanged classic behavior.
+- `bench up --daemon` — starts the session in the background: spawns a detached worker (the same `up` code path, re-entered with the `BENCH_DAEMON` env sentinel and `setsid`, stdout/stderr to a log file beside the socket), waits for its socket, and returns to the shell. The worker owns the supervisor and blocks until `down` or a signal.
+- `bench` (no subcommand) — attaches an interactive TUI to the running session over the socket (`remoteSession`), auto-spawning a `--daemon` session first if none is live. Quitting can leave the session running ("background"); see [keyboard shortcuts](keyboard-shortcuts.md).
+- `bench down` — stops all services and ends the session.
+
+Other subcommands connect to the running instance via the control socket.
 
 ## Design Principles
 

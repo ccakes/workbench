@@ -1,6 +1,8 @@
 # Control API
 
-`bench up` exposes a Unix domain socket that enables external tools and CLI subcommands to interact with the running instance.
+The session host (`bench up`, or a detached `bench up --daemon`) exposes a Unix
+domain socket that enables external tools, CLI subcommands, and the attached TUI
+to interact with the running instance.
 
 ## Socket Path
 
@@ -35,6 +37,8 @@ roots — the current `$TMPDIR`, `/tmp`, `/var/tmp`, and `/var/folders/*/*/T`
 ## Protocol
 
 Request-per-connection model. The client connects, sends one JSON request line, receives one JSON response line, then the connection closes.
+
+The one exception is `subscribe` (see below), which keeps the connection open and streams events.
 
 **Request format:**
 ```json
@@ -110,6 +114,40 @@ Fetch buffered log lines for a service. Default 100 lines. Each line includes a 
 
 Response lines include `timestamp`, `stream`, `text`, and `seq`.
 
+### clear-logs
+
+Clear a service's log ring buffer.
+
+```json
+{"method": "clear-logs", "params": {"service": "web"}}
+→ {"ok": true, "data": {"status": "cleared"}}
+```
+
+### config
+
+Return the static (config-derived) fields for the detail view. Without params, returns all services; with `service`, a single one.
+
+```json
+{"method": "config"}
+{"method": "config", "params": {"service": "web"}}
+```
+
+Response fields per service: `key`, `type` (`process`/`container`), `group`, `dir`, `command`, `env_file`, `restart`, `image`.
+
+### subscribe
+
+Open a streaming connection to the event bus. The first line is a normal response (`{"ok": true, "data": {"attached": true}}`, or an error if another interactive client already holds the stream). Subsequent lines are newline-delimited events, one JSON object per line:
+
+```json
+{"method": "subscribe"}
+→ {"ok": true, "data": {"attached": true}}
+→ {"type": "state", "service": "web", "ts": "...", "old_status": "starting", "new_status": "ready"}
+→ {"type": "log", "service": "web", "ts": "...", "stream": "stdout", "line": "listening on :8080"}
+→ {"type": "span_batch", "ts": "...", "count": 12}
+```
+
+`type` is one of `state`, `log`, `file`, `restart`, `span_batch`. Only **one** subscribe stream is allowed at a time (the single interactive-client rule); request/response methods are unaffected. The stream ends when the client disconnects or the session shuts down. This drives the attached TUI (`bench`).
+
 ### down
 
 Stop every service and shut the session down. Unlike `stop` (which targets a
@@ -157,9 +195,27 @@ Get the service interaction graph (requires tracing enabled).
 {"method": "service-map"}
 ```
 
+### trace-stats
+
+Get span store usage (requires tracing enabled). Used by the attached TUI's status bar.
+
+```json
+{"method": "trace-stats"}
+→ {"ok": true, "data": {"spans": 142, "bytes": 81920}}
+```
+
+## Session lifecycle
+
+| Command | Behavior |
+|---------|----------|
+| `bench up` | Foreground: starts services and opens the TUI in this process (classic behavior). |
+| `bench up --daemon` | Starts the session in the background (detached, no UI) and returns to the shell. The session host owns the socket. |
+| `bench` | Attaches an interactive TUI to the running session, auto-spawning a `--daemon` session if none is live. Only one TUI may attach at a time. |
+| `bench down` | Stops all services and ends the session. |
+
 ## CLI Integration
 
-The following subcommands connect to a running `bench up` instance via the socket:
+The following subcommands connect to a running session via the socket:
 
 | Command | Behavior |
 |---------|----------|

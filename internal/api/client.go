@@ -8,7 +8,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"github.com/ccakes/workbench/internal/events"
 )
 
 // Client communicates with a running bench instance over a Unix socket.
@@ -89,6 +92,75 @@ func (c *Client) CallWithTimeout(method string, params any, timeout time.Duratio
 func (c *Client) Ping() error {
 	_, err := c.Call("ping", nil)
 	return err
+}
+
+// Subscribe opens a streaming connection to the server's event bus. It returns a
+// channel of events and a stop function. The channel is closed when the stream
+// ends — server shutdown, disconnect, or stop() being called. An error is
+// returned if the connection fails or another client already holds the stream
+// (the single interactive-client rule).
+func (c *Client) Subscribe() (<-chan events.Event, func(), error) {
+	conn, err := net.DialTimeout("unix", c.sockPath, 5*time.Second)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connecting to bench: %w", err)
+	}
+
+	req := Request{Method: "subscribe"}
+	data, _ := json.Marshal(req)
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("sending subscribe: %w", err)
+	}
+
+	r := bufio.NewReaderSize(conn, 1024*1024)
+
+	// First line is a standard Response — confirms attach or reports that another
+	// client already holds the stream.
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("reading subscribe response: %w", err)
+	}
+	var resp Response
+	if err := json.Unmarshal(line, &resp); err != nil {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("decoding subscribe response: %w", err)
+	}
+	if !resp.OK {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("%s", resp.Error)
+	}
+
+	out := make(chan events.Event, 256)
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		for {
+			line, err := r.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var w WireEvent
+			if json.Unmarshal(line, &w) != nil {
+				continue
+			}
+			select {
+			case out <- w.ToEvent():
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			close(done)
+			_ = conn.Close()
+		})
+	}
+	return out, stop, nil
 }
 
 // SocketPath derives the socket path from a config file's absolute path.

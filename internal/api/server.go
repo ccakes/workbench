@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ccakes/workbench/internal/spanbuf"
@@ -29,6 +30,16 @@ type Server struct {
 	// teardown path, which stops every service.
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
+
+	// closing is closed when Shutdown() is called, so long-lived streaming
+	// handlers (subscribe) return and let wg.Wait() complete.
+	closing   chan struct{}
+	closeOnce sync.Once
+
+	// attached enforces a single interactive TUI client at a time. Control
+	// commands (status/logs/stop/...) are unaffected — only the subscribe stream
+	// takes this flag.
+	attached atomic.Bool
 }
 
 type handlerFunc func(json.RawMessage) (any, error)
@@ -41,6 +52,7 @@ func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version str
 		sockPath:   sockPath,
 		version:    version,
 		shutdownCh: make(chan struct{}),
+		closing:    make(chan struct{}),
 	}
 	s.handlers = map[string]handlerFunc{
 		"ping":         s.handlePing,
@@ -49,12 +61,15 @@ func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version str
 		"stop":         s.handleStop,
 		"restart":      s.handleRestart,
 		"logs":         s.handleLogs,
+		"clear-logs":   s.handleClearLogs,
+		"config":       s.handleConfig,
 		"wait":         s.handleWait,
 		"reload":       s.handleReload,
 		"toggle-watch": s.handleToggleWatch,
 		"traces":       s.handleTraces,
 		"spans":        s.handleSpans,
 		"service-map":  s.handleServiceMap,
+		"trace-stats":  s.handleTraceStats,
 		"down":         s.handleDown,
 	}
 	return s
@@ -90,6 +105,7 @@ func (s *Server) Start() error {
 
 // Shutdown closes the listener, waits for in-flight connections, and removes the socket.
 func (s *Server) Shutdown() {
+	s.closeOnce.Do(func() { close(s.closing) })
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -145,6 +161,13 @@ func (s *Server) handleConn(conn net.Conn) {
 	var req Request
 	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 		s.writeError(conn, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// subscribe is a long-lived streaming connection, handled separately from
+	// the one-request-one-response control methods.
+	if req.Method == "subscribe" {
+		s.handleSubscribe(conn)
 		return
 	}
 

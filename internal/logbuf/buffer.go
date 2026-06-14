@@ -33,11 +33,18 @@ func New(maxLines int) *Buffer {
 }
 
 func (b *Buffer) Add(stream, text string) {
+	b.AddLine(time.Now(), stream, text)
+}
+
+// AddLine appends a line preserving its timestamp and stream, assigning a fresh
+// monotonic Seq. Used by the control client to mirror server-side logs without
+// losing their original timestamps.
+func (b *Buffer) AddLine(timestamp time.Time, stream, text string) {
 	b.mu.Lock()
 	b.seq++
 	idx := (b.start + b.count) % b.max
 	b.lines[idx] = Line{
-		Timestamp: time.Now(),
+		Timestamp: timestamp,
 		Stream:    stream,
 		Text:      text,
 		Seq:       b.seq,

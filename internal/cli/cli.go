@@ -74,7 +74,9 @@ func Run() int {
 	leading := args[:len(args)-len(rest)]
 
 	if len(rest) == 0 {
-		return runUp(leading)
+		// Bare `bench` attaches a TUI to the running session (auto-spawning a
+		// detached daemon if none exists). `bench up` starts the session.
+		return runAttach(leading)
 	}
 
 	cmd := rest[0]
@@ -129,8 +131,12 @@ func printUsage() {
 Usage:
   bench [command] [flags]
 
+  Run 'bench' with no command to attach a TUI to the running session
+  (a background session is started automatically if none is running).
+
 Commands:
-  up                 Start services and open TUI (default)
+  up                 Start services and open the TUI in the foreground
+  up --daemon        Start the session in the background (detached, no UI)
   start              Start specific services
   stop               Stop specific services
   down               Stop all services and shut down the session
@@ -255,9 +261,29 @@ func runUp(args []string) int {
 	noTUI := fs.Bool("no-tui", false, "disable TUI, run in foreground")
 	noWatch := fs.Bool("no-watch", false, "disable file watching")
 	verbose := fs.Bool("verbose", false, "verbose output")
+	daemon := fs.Bool("daemon", false, "run the session in the background (detached, no UI)")
 	var profiles stringSlice
 	fs.Var(&profiles, "profile", "activate the named profile (repeatable)")
 	_ = fs.Parse(reorderFlags(args))
+
+	// `bench up --daemon` is the launcher: spawn a detached worker (which re-runs
+	// this function with BENCH_DAEMON=1) and return to the shell. The worker runs
+	// the full session and blocks; it is never a TUI.
+	isWorker := os.Getenv("BENCH_DAEMON") == "1"
+	if *daemon && !isWorker {
+		client, spawned, err := ensureSession(*configPath, *socketPath, *noWatch, profiles, fs.Args())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		_ = client
+		if spawned {
+			fmt.Println("session started in the background — attach with `bench`, stop with `bench down`")
+		} else {
+			fmt.Println("session already running — attach with `bench`")
+		}
+		return 0
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -346,16 +372,15 @@ func runUp(args []string) int {
 		}
 	}
 
-	// A `down` control request closes this channel; both the headless loop and
-	// the TUI watch it so a remote `bench down` triggers the same teardown as a
-	// local SIGINT.
+	// A `down` control request closes this channel; the headless loop, the TUI,
+	// and the detached worker all watch it so a remote `bench down` triggers the
+	// same teardown as a local SIGINT.
 	var shutdownReq <-chan struct{}
 	if apiSrv != nil {
 		shutdownReq = apiSrv.ShutdownRequested()
 	}
 
-	if *noTUI {
-		code := runHeadless(sup, bus, shutdownReq, *verbose)
+	teardown := func() {
 		if apiSrv != nil {
 			apiSrv.Shutdown()
 		}
@@ -365,14 +390,32 @@ func runUp(args []string) int {
 		if watchMgr != nil {
 			watchMgr.Stop()
 		}
+		sup.Shutdown()
+	}
+
+	// Detached worker: no UI, just own the session until `down` or a signal.
+	if isWorker {
+		sigCh := make(chan os.Signal, 1)
+		signalNotify(sigCh)
+		select {
+		case <-shutdownReq:
+		case <-sigCh:
+		}
+		teardown()
+		return 0
+	}
+
+	if *noTUI {
+		code := runHeadless(sup, bus, shutdownReq, *verbose)
+		teardown()
 		return code
 	}
 
-	m := tui.NewModel(sup, store)
+	m := tui.NewModel(tui.NewLocalSession(sup, store))
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	// Quit the TUI when a remote `down` arrives; teardown below then stops
-	// services just as it does on a normal quit.
+	// Quit the TUI when a remote `down` arrives; teardown then stops services
+	// just as it does on a normal quit.
 	if shutdownReq != nil {
 		go func() {
 			<-shutdownReq
@@ -384,16 +427,120 @@ func runUp(args []string) int {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 	}
 
-	if apiSrv != nil {
-		apiSrv.Shutdown()
+	teardown()
+	return 0
+}
+
+// ensureSession makes sure a live daemon exists for the given config, spawning a
+// detached one if needed, and returns a connected client. The bool reports
+// whether a new daemon was spawned (false means one was already running).
+func ensureSession(configPath, socketPath string, noWatch bool, profiles []string, subset []string) (*api.Client, bool, error) {
+	resolved, err := resolveConfigPath(configPath)
+	if err != nil {
+		return nil, false, err
 	}
-	if col != nil {
-		_ = col.Shutdown()
+	sockPath, err := api.SocketPathFromEnvOrConfig(socketPath, resolved)
+	if err != nil {
+		return nil, false, err
 	}
-	if watchMgr != nil {
-		watchMgr.Stop()
+	client := api.NewClient(sockPath)
+	if client.Ping() == nil {
+		return client, false, nil
 	}
-	sup.Shutdown()
+
+	// Validate before spawning so config errors surface synchronously rather
+	// than as a silent daemon that never binds its socket.
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, false, fmt.Errorf("config validation failed:\n%v", err)
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		return nil, false, err
+	}
+	wargs := []string{"up", "--daemon", "--config", resolved}
+	if socketPath != "" {
+		wargs = append(wargs, "--socket", socketPath)
+	}
+	if noWatch {
+		wargs = append(wargs, "--no-watch")
+	}
+	for _, p := range profiles {
+		wargs = append(wargs, "--profile", p)
+	}
+	wargs = append(wargs, subset...)
+
+	logPath := strings.TrimSuffix(sockPath, ".sock") + ".log"
+	if err := spawnDaemon(self, wargs, logPath); err != nil {
+		return nil, false, fmt.Errorf("spawning session daemon: %w", err)
+	}
+	if err := waitForSocket(client, 10*time.Second); err != nil {
+		return nil, false, fmt.Errorf("session daemon did not start within 10s: %w\n--- %s ---\n%s",
+			err, logPath, tailFile(logPath, 20))
+	}
+	return client, true, nil
+}
+
+// waitForSocket polls until the daemon answers a ping or the timeout elapses.
+func waitForSocket(client *api.Client, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := client.Ping(); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// tailFile returns the last n lines of a file, or a short note if unreadable.
+func tailFile(path string, n int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "(no daemon log available)"
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// runAttach is bare `bench`: ensure a session is running (spawning a detached
+// daemon if needed) and attach an interactive TUI client over the socket.
+func runAttach(args []string) int {
+	fs := flag.NewFlagSet("attach", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	socketPath := fs.String("socket", "", "control socket path (default: auto)")
+	noWatch := fs.Bool("no-watch", false, "disable file watching (only when spawning a new session)")
+	var profiles stringSlice
+	fs.Var(&profiles, "profile", "activate the named profile (only when spawning a new session)")
+	_ = fs.Parse(reorderFlags(args))
+
+	client, _, err := ensureSession(*configPath, *socketPath, *noWatch, profiles, fs.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	session, err := tui.NewRemoteSession(client)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	defer session.Close()
+
+	p := tea.NewProgram(tui.NewModel(session), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

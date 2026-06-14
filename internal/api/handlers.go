@@ -119,6 +119,82 @@ type serviceParam struct {
 	Service string `json:"service"`
 }
 
+// ServiceConfigInfo is the wire format for the static (config-derived) fields
+// the TUI detail pane shows. Exported for client reuse.
+type ServiceConfigInfo struct {
+	Key     string `json:"key"`
+	Type    string `json:"type"`
+	Group   string `json:"group,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	Command string `json:"command,omitempty"`
+	EnvFile string `json:"env_file,omitempty"`
+	Restart string `json:"restart,omitempty"`
+	Image   string `json:"image,omitempty"`
+}
+
+func (s *Server) buildServiceConfig(key string) ServiceConfigInfo {
+	ci := ServiceConfigInfo{Key: key, Type: "process"}
+	cfg := s.sup.ServiceConfig(key)
+	if cfg == nil {
+		return ci
+	}
+	ci.Group = cfg.Group
+	ci.Dir = cfg.Dir
+	ci.EnvFile = cfg.EnvFile
+	ci.Restart = cfg.Restart.Policy
+	if cfg.IsContainer() {
+		ci.Type = "container"
+		ci.Image = cfg.Container.Image
+	} else if cfg.Command != nil {
+		ci.Command = cfg.Command.String()
+	}
+	return ci
+}
+
+func (s *Server) handleConfig(raw json.RawMessage) (any, error) {
+	var p serviceParam
+	_ = json.Unmarshal(raw, &p)
+	if p.Service != "" {
+		if s.sup.ServiceConfig(p.Service) == nil {
+			return nil, fmt.Errorf("unknown service %q", p.Service)
+		}
+		return s.buildServiceConfig(p.Service), nil
+	}
+	keys := s.sup.ServiceKeys()
+	result := make([]ServiceConfigInfo, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, s.buildServiceConfig(key))
+	}
+	return result, nil
+}
+
+func (s *Server) handleClearLogs(raw json.RawMessage) (any, error) {
+	var p serviceParam
+	if err := json.Unmarshal(raw, &p); err != nil || p.Service == "" {
+		return nil, fmt.Errorf("service parameter required")
+	}
+	buf := s.sup.ServiceLogs(p.Service)
+	if buf == nil {
+		return nil, fmt.Errorf("unknown service %q", p.Service)
+	}
+	buf.Clear()
+	return map[string]string{"status": "cleared"}, nil
+}
+
+// TraceStats is the wire format for span store usage. Exported for client reuse.
+type TraceStats struct {
+	Spans int   `json:"spans"`
+	Bytes int64 `json:"bytes"`
+}
+
+func (s *Server) handleTraceStats(_ json.RawMessage) (any, error) {
+	store := s.getStore()
+	if store == nil {
+		return nil, fmt.Errorf("tracing is not enabled")
+	}
+	return TraceStats{Spans: store.Len(), Bytes: store.BytesUsed()}, nil
+}
+
 func (s *Server) handleStart(raw json.RawMessage) (any, error) {
 	var p serviceParam
 	if err := json.Unmarshal(raw, &p); err != nil || p.Service == "" {

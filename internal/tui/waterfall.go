@@ -131,11 +131,11 @@ func (m Model) viewWaterfall() string {
 }
 
 func (m Model) viewServiceMap() string {
-	if m.store == nil {
+	if !m.session.HasTracing() {
 		return styleLabel.Render("tracing not enabled")
 	}
 
-	snap := m.store.ServiceMap()
+	snap := m.session.ServiceMap()
 
 	statusBarHeight := 1
 	_ = statusBarHeight

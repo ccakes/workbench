@@ -43,6 +43,18 @@ func (s Status) String() string {
 	return fmt.Sprintf("unknown(%d)", int(s))
 }
 
+// ParseStatus maps a status string (as produced by String) back to a Status.
+// Unknown strings map to StatusPending. Used by the control client to rebuild
+// snapshots from the wire.
+func ParseStatus(s string) Status {
+	for st, name := range statusNames {
+		if name == s {
+			return st
+		}
+	}
+	return StatusPending
+}
+
 // IsRunning returns true if the service has an active process.
 func (s Status) IsRunning() bool {
 	return s == StatusRunning || s == StatusReady || s == StatusStarting || s == StatusSetup

@@ -59,7 +59,7 @@ func TestViewLineWidths(t *testing.T) {
 
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
-	m := NewModel(sup, nil)
+	m := NewModel(newLocalSession(sup, nil))
 
 	// Test at various terminal sizes
 	sizes := []struct{ w, h int }{
@@ -119,7 +119,7 @@ func TestLogScroll(t *testing.T) {
 
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
-	m := NewModel(sup, nil)
+	m := NewModel(newLocalSession(sup, nil))
 
 	// Seed many lines, each far wider than the pane.
 	logs := sup.ServiceLogs("svc")
@@ -232,7 +232,7 @@ func TestServiceListLineWidths(t *testing.T) {
 
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
-	m := NewModel(sup, nil)
+	m := NewModel(newLocalSession(sup, nil))
 
 	for _, contentWidth := range []int{20, 30, 36, 50} {
 		content := m.viewServiceList(contentWidth, 20)
@@ -275,7 +275,7 @@ func TestDetailPaneLineWidths(t *testing.T) {
 
 	bus := events.NewBus()
 	sup := supervisor.New(cfg, bus)
-	m := NewModel(sup, nil)
+	m := NewModel(newLocalSession(sup, nil))
 
 	for _, contentWidth := range []int{40, 60, 80, 100} {
 		for i, key := range m.services {
