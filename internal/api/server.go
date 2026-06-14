@@ -23,6 +23,12 @@ type Server struct {
 	version  string
 	handlers map[string]handlerFunc
 	wg       sync.WaitGroup
+
+	// shutdownCh is closed (once) when a client requests `down`. The process
+	// that owns this server selects on ShutdownRequested() and runs its normal
+	// teardown path, which stops every service.
+	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 }
 
 type handlerFunc func(json.RawMessage) (any, error)
@@ -30,10 +36,11 @@ type handlerFunc func(json.RawMessage) (any, error)
 // New creates a new API server.
 func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version string) *Server {
 	s := &Server{
-		sup:      sup,
-		store:    store,
-		sockPath: sockPath,
-		version:  version,
+		sup:        sup,
+		store:      store,
+		sockPath:   sockPath,
+		version:    version,
+		shutdownCh: make(chan struct{}),
 	}
 	s.handlers = map[string]handlerFunc{
 		"ping":         s.handlePing,
@@ -48,8 +55,15 @@ func New(sup *supervisor.Supervisor, store *spanbuf.Store, sockPath, version str
 		"traces":       s.handleTraces,
 		"spans":        s.handleSpans,
 		"service-map":  s.handleServiceMap,
+		"down":         s.handleDown,
 	}
 	return s
+}
+
+// ShutdownRequested returns a channel that is closed when a client invokes the
+// `down` method. The owning process should select on it and begin teardown.
+func (s *Server) ShutdownRequested() <-chan struct{} {
+	return s.shutdownCh
 }
 
 // Start begins listening and accepting connections.

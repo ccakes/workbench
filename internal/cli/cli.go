@@ -88,6 +88,8 @@ func Run() int {
 		return runStart(forward)
 	case "stop":
 		return runStop(forward)
+	case "down":
+		return runDown(forward)
 	case "restart":
 		return runRestart(forward)
 	case "status":
@@ -131,6 +133,7 @@ Commands:
   up                 Start services and open TUI (default)
   start              Start specific services
   stop               Stop specific services
+  down               Stop all services and shut down the session
   restart            Restart specific services
   status             Show service status
   socket             Print the control socket path of a running instance
@@ -343,19 +346,39 @@ func runUp(args []string) int {
 		}
 	}
 
+	// A `down` control request closes this channel; both the headless loop and
+	// the TUI watch it so a remote `bench down` triggers the same teardown as a
+	// local SIGINT.
+	var shutdownReq <-chan struct{}
+	if apiSrv != nil {
+		shutdownReq = apiSrv.ShutdownRequested()
+	}
+
 	if *noTUI {
-		code := runHeadless(sup, bus, *verbose)
+		code := runHeadless(sup, bus, shutdownReq, *verbose)
 		if apiSrv != nil {
 			apiSrv.Shutdown()
 		}
 		if col != nil {
 			_ = col.Shutdown()
 		}
+		if watchMgr != nil {
+			watchMgr.Stop()
+		}
 		return code
 	}
 
 	m := tui.NewModel(sup, store)
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	// Quit the TUI when a remote `down` arrives; teardown below then stops
+	// services just as it does on a normal quit.
+	if shutdownReq != nil {
+		go func() {
+			<-shutdownReq
+			p.Quit()
+		}()
+	}
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
@@ -461,7 +484,7 @@ func applyServiceSubset(cfg *config.Config, roots []string) error {
 	return nil
 }
 
-func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, verbose bool) int {
+func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, shutdownReq <-chan struct{}, verbose bool) int {
 	ch := bus.Subscribe(64)
 	defer bus.Unsubscribe(ch)
 
@@ -470,6 +493,10 @@ func runHeadless(sup *supervisor.Supervisor, bus *events.Bus, verbose bool) int 
 
 	for {
 		select {
+		case <-shutdownReq:
+			fmt.Println("\nshutting down...")
+			sup.Shutdown()
+			return 0
 		case evt := <-ch:
 			switch evt.Type {
 			case events.ServiceStateChanged:
@@ -563,6 +590,36 @@ func runStop(args []string) int {
 		}
 		fmt.Printf("stopped %s\n", svc)
 	}
+	return 0
+}
+
+// runDown stops all services in a running session and shuts the session down.
+// Unlike `stop`, which targets named services, `down` tears the whole session
+// down: the owning process runs its normal teardown (stopping every service)
+// and exits, releasing the control socket.
+func runDown(args []string) int {
+	fs := flag.NewFlagSet("down", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config file")
+	socketOverride := fs.String("socket", "", "control socket path")
+	_ = fs.Parse(reorderFlags(args))
+
+	client, err := connectToRunning(*configPath, *socketOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	data, err := client.Call("down", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	var result struct {
+		Services int `json:"services"`
+	}
+	_ = json.Unmarshal(data, &result)
+	fmt.Printf("session stopped (%d services)\n", result.Services)
 	return 0
 }
 

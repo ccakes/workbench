@@ -848,6 +848,36 @@ func TestServerStartBeforeSupervisor(t *testing.T) {
 	}
 }
 
+func TestDown(t *testing.T) {
+	srv, client, _ := setupServer(t)
+
+	data, err := client.Call("down", nil)
+	if err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	var result struct {
+		Services int `json:"services"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Services != 2 {
+		t.Errorf("got %d services, want 2", result.Services)
+	}
+
+	// The shutdown channel must be closed so the owning process tears down.
+	select {
+	case <-srv.ShutdownRequested():
+	default:
+		t.Fatal("down should have closed the shutdown channel")
+	}
+
+	// Calling down again must be safe (close-once) and still report success.
+	if _, err := client.Call("down", nil); err != nil {
+		t.Fatalf("second down: %v", err)
+	}
+}
+
 func pollUntil(t *testing.T, timeout, interval time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.After(timeout)

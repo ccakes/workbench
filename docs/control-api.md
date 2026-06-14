@@ -110,6 +110,19 @@ Fetch buffered log lines for a service. Default 100 lines. Each line includes a 
 
 Response lines include `timestamp`, `stream`, `text`, and `seq`.
 
+### down
+
+Stop every service and shut the session down. Unlike `stop` (which targets a
+named service), `down` tears the whole session down: the owning process runs its
+normal teardown — stopping all services — and exits, releasing the control
+socket. The handler returns immediately with the number of services that were
+running; the actual teardown happens as the owner exits.
+
+```json
+{"method": "down"}
+→ {"ok": true, "data": {"services": 3}}
+```
+
 ### toggle-watch
 
 Toggle file watching for a service.
@@ -154,6 +167,7 @@ The following subcommands connect to a running `bench up` instance via the socke
 | `bench status` | Shows live PID, uptime, restart counts. Falls back to config-only if no running instance. |
 | `bench start <svc>` | Starts a service in the running instance. |
 | `bench stop <svc>` | Stops a service in the running instance. |
+| `bench down` | Stops all services and shuts the running instance down. |
 | `bench restart <svc>` | Restarts a service in the running instance. |
 | `bench logs <svc>` | Fetches buffered logs. Use `--follow` to poll for new lines. |
 

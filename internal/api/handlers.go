@@ -22,6 +22,15 @@ func (s *Server) handlePing(_ json.RawMessage) (any, error) {
 	return map[string]string{"version": s.version}, nil
 }
 
+// handleDown signals the owning process to shut down. It does not stop services
+// itself — it closes the shutdown channel (once) and returns immediately, so the
+// owner runs its normal teardown path (which stops every service) exactly once.
+func (s *Server) handleDown(_ json.RawMessage) (any, error) {
+	count := len(s.sup.ServiceKeys())
+	s.shutdownOnce.Do(func() { close(s.shutdownCh) })
+	return map[string]int{"services": count}, nil
+}
+
 func (s *Server) getStore() *spanbuf.Store {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
