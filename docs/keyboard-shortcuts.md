@@ -57,7 +57,15 @@ right edge stops at the pane edge.
 ### Quit confirmation
 
 Pressing `q` or `Ctrl+C` opens a confirmation dialog before exiting, so an
-accidental keypress won't tear down all your running services. Press `y`
-(or `Enter`) to confirm and quit, or any other key (e.g. `n` / `Esc`) to cancel
-and return to the TUI. The prompt works from any view — the service list, the
-trace browser, the waterfall, and the service map.
+accidental keypress won't tear down all your running services. The options:
+
+- `s` (or `Enter`) — **stop all & quit**: stop every service and end the session.
+- `b` — **background**: disconnect the UI but leave the session running, so you
+  can re-attach later with `bench` or stop it with `bench down`. Only offered
+  when attached to a detached daemon (i.e. you ran `bench`, not `bench up`); a
+  foreground `bench up` cannot be backgrounded because its supervisor lives in
+  the same process.
+- `Esc` (or any other key) — cancel and return to the TUI.
+
+The prompt works from any view — the service list, the trace browser, the
+waterfall, and the service map.

@@ -111,8 +111,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.confirmQuit {
 			switch msg.String() {
-			case "y", "Y", "enter":
+			case "s", "S", "y", "Y", "enter":
+				// Stop all services and quit.
+				_ = m.session.Down()
 				return m, tea.Quit
+			case "b", "B":
+				// Background: disconnect the UI but leave the session running.
+				// Only available when attached to a detached daemon.
+				if m.session.CanBackground() {
+					return m, tea.Quit
+				}
+				m.confirmQuit = false
 			default:
 				m.confirmQuit = false
 			}
@@ -846,15 +855,23 @@ func (m Model) viewStatusBar() string {
 }
 
 func (m Model) viewConfirmQuit() string {
-	prompt := lipgloss.JoinVertical(lipgloss.Center,
-		styleTitle.Render("Quit workbench?"),
-		"",
-		styleHelp.Render("This will stop all managed services."),
-		"",
-		styleHelpKey.Render("y")+styleHelp.Render(" confirm   ")+
-			styleHelpKey.Render("n")+styleHelp.Render(" cancel"),
-	)
+	rows := []string{styleTitle.Render("Quit workbench?"), ""}
 
+	keys := styleHelpKey.Render("s") + styleHelp.Render(" stop all & quit   ")
+	if m.session.CanBackground() {
+		rows = append(rows,
+			styleHelp.Render("Background keeps services running with no UI attached."),
+			"")
+		keys += styleHelpKey.Render("b") + styleHelp.Render(" background   ")
+	} else {
+		rows = append(rows,
+			styleHelp.Render("This will stop all managed services."),
+			"")
+	}
+	keys += styleHelpKey.Render("esc") + styleHelp.Render(" cancel")
+	rows = append(rows, keys)
+
+	prompt := lipgloss.JoinVertical(lipgloss.Center, rows...)
 	dialog := styleBorderActive.Padding(1, 3).Render(prompt)
 
 	return lipgloss.Place(m.width, m.height-1,
