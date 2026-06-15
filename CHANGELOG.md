@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-06-15
+
+### Fixed
+
+- Profile gating now applies even when no `--profile` is given. Previously
+  `bench up` with no profile launched every profile-tagged service (contrary to
+  the documented "profile-less services only" default); now those services
+  register as `disabled` and stay visible in the TUI and `bench status`, ready to
+  start on demand with `bench start <service>`.
+
+### Added
+
+- `bench down` stops all services in a running session and shuts the session
+  down, releasing the control socket. Useful for tearing everything down to start
+  fresh — including sessions started in the background by an AI agent.
+- Detachable sessions. `bench up --daemon` starts the session in the background
+  (detached, no UI) and returns to the shell. Running `bench` with no subcommand
+  now **attaches** an interactive TUI to the running session over the control
+  socket — so you can "take over" a session an agent started headless, and detach
+  again without stopping it. Only one TUI may be attached at a time.
+- The TUI quit dialog now offers a third option, **background** (`b`): disconnect
+  the UI but leave the session running. Available when attached to a detached
+  session; quit otherwise stops all services (`s`).
+
+### Changed
+
+- Bare `bench` (no subcommand) now attaches to a running session instead of
+  aliasing `bench up`. Use `bench up` for the classic foreground TUI, or
+  `bench up --daemon` to start a background session.
+
 ## [0.6.8] - 2026-05-31
 
 ### Added

@@ -152,6 +152,31 @@ func TestApplyProfileFilter(t *testing.T) {
 	}
 }
 
+// With no active profile, profile-tagged services must be gated off (disabled)
+// rather than launched, while profile-less services stay on. This is what makes
+// `bench up` with no --profile leave gated services visible-but-disabled.
+func TestApplyProfileFilter_NoActiveProfiles(t *testing.T) {
+	cfg := &config.Config{
+		Services: map[string]config.ServiceConfig{
+			"always":   {}, // no profiles -> always on
+			"core-a":   {Profiles: []string{"core"}, DependsOn: []string{"db"}},
+			"frontend": {Profiles: []string{"frontend"}},
+			"db":       {}, // profile-less, stays on (not pulled by a gated svc)
+		},
+	}
+	applyProfileFilter(cfg, nil)
+	for _, key := range []string{"always", "db"} {
+		if svc := cfg.Services[key]; !svc.GetAutoStart() {
+			t.Errorf("expected profile-less %s to stay auto_start with no active profile", key)
+		}
+	}
+	for _, key := range []string{"core-a", "frontend"} {
+		if svc := cfg.Services[key]; svc.GetAutoStart() {
+			t.Errorf("expected gated %s to be disabled with no active profile", key)
+		}
+	}
+}
+
 func TestContainerNamesWithPrefix(t *testing.T) {
 	got := containerNamesWithPrefix("benchproj", `
 benchproj-api

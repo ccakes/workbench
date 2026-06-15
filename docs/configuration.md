@@ -281,6 +281,11 @@ bench up --profile core     # postgres + flagman
 bench up --profile core --profile frontend  # postgres + flagman + portal
 ```
 
+Profile-tagged services that no active profile selects are **not removed** — they
+register as `disabled` and stay visible in the TUI and `bench status`. Start one
+on demand with `bench start <service>` (or the `s` key in the TUI) without
+restarting the session.
+
 When `bench up <service>` is invoked with positional arguments, the explicit
 service list wins — profile flags are ignored, and the named services + their
 transitive deps come up regardless of profile.

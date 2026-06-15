@@ -301,7 +301,11 @@ func runUp(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-	} else if len(profiles) > 0 {
+	} else {
+		// Always gate by profile, even with no --profile. Profile-tagged
+		// services that no active profile selects are flipped to
+		// auto_start:false so they register as disabled (visible in the TUI
+		// and status, startable on demand) rather than launching by default.
 		applyProfileFilter(cfg, profiles)
 	}
 
@@ -813,12 +817,15 @@ func runStatus(args []string) int {
 		return statusFromRunning(client, *jsonOut, *why, fs.Args())
 	}
 
-	// Fall back to config-only output
+	// Fall back to config-only output. Mirror the default `bench up` gating so
+	// profile-tagged services that no active profile selects report as disabled
+	// rather than as if they would launch.
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	applyProfileFilter(cfg, nil)
 
 	if *jsonOut {
 		return statusJSON(cfg)
