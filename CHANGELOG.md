@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Starting a session no longer fails with `spawning session daemon: open
+  /tmp/bench-<uid>/...log: no such file or directory` when the per-user socket
+  directory is missing (e.g. after the OS reaps `/tmp`). The launcher now
+  ensures the directory exists before writing the daemon log, instead of
+  relying on the not-yet-started daemon to create it.
+
 ## [0.6.9] - 2026-06-15
 
 ### Fixed

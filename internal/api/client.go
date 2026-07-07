@@ -291,7 +291,12 @@ func privateSocketDir() (string, error) {
 	return filepath.Join(os.TempDir(), name), nil
 }
 
-func ensurePrivateSocketDir(sockPath string) error {
+// EnsureSocketDir makes sure the private per-user socket directory that holds
+// sockPath exists with hardened permissions (0700, not a symlink). It is a
+// no-op when sockPath lives outside that directory (e.g. a custom --socket or
+// BENCH_SOCKET path). Safe to call repeatedly; both the launcher (before
+// writing the daemon log) and the daemon (before binding) invoke it.
+func EnsureSocketDir(sockPath string) error {
 	dir, err := privateSocketDir()
 	if err != nil {
 		return err
