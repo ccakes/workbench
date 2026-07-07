@@ -478,6 +478,12 @@ func ensureSession(configPath, socketPath string, noWatch bool, profiles []strin
 	}
 	wargs = append(wargs, subset...)
 
+	// The daemon creates this directory when it binds its socket, but we write
+	// its log file there first — ensure it exists (macOS reaps /tmp entries, so
+	// a dir from a prior session may be gone).
+	if err := api.EnsureSocketDir(sockPath); err != nil {
+		return nil, false, fmt.Errorf("preparing session directory: %w", err)
+	}
 	logPath := strings.TrimSuffix(sockPath, ".sock") + ".log"
 	if err := spawnDaemon(self, wargs, logPath); err != nil {
 		return nil, false, fmt.Errorf("spawning session daemon: %w", err)

@@ -83,7 +83,7 @@ func (s *Server) ShutdownRequested() <-chan struct{} {
 
 // Start begins listening and accepting connections.
 func (s *Server) Start() error {
-	if err := ensurePrivateSocketDir(s.sockPath); err != nil {
+	if err := EnsureSocketDir(s.sockPath); err != nil {
 		return err
 	}
 
