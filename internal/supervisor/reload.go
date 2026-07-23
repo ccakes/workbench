@@ -46,7 +46,7 @@ func (s *Supervisor) Reload(newCfg *config.Config) ReloadReport {
 		ms.mu.Lock()
 		ms.cfg = newSvc
 		ms.mu.Unlock()
-		applyServiceMetadata(ms.info, key, newSvc, true)
+		applyServiceMetadata(ms.info, key, newSvc, true, s.backend.Name())
 		if err := s.RestartService(key, "config reload"); err != nil {
 			report.Errors[key] = err.Error()
 			continue

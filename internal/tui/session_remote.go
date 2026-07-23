@@ -385,6 +385,7 @@ func snapFromStatus(s api.ServiceStatus) service.Snapshot {
 		LastError:    s.LastError,
 		WatchEnabled: s.WatchEnabled,
 		ServiceType:  s.Type,
+		Backend:      s.Backend,
 		ContainerID:  s.ContainerID,
 		Image:        s.Image,
 		Ports:        s.Ports,

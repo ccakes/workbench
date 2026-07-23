@@ -61,7 +61,11 @@ func tracingCfg(svc config.ServiceConfig) *config.Config {
 	return &config.Config{
 		Version: 1,
 		Global: config.GlobalConfig{
-			Tracing: config.TracingConfig{Enabled: true, Port: 4318},
+			// Pin the Docker backend so the injected OTEL host is deterministic
+			// regardless of the test machine (auto-detect could otherwise pick
+			// the Apple backend on Apple silicon).
+			ContainerBackend: config.BackendDocker,
+			Tracing:          config.TracingConfig{Enabled: true, Port: 4318},
 		},
 		Services: map[string]config.ServiceConfig{"svc": svc},
 	}
@@ -78,6 +82,19 @@ func TestOTEL_InjectsDefaultsWhenUnset(t *testing.T) {
 	}
 	if got, want := env["OTEL_EXPORTER_OTLP_PROTOCOL"], "http/protobuf"; got != want {
 		t.Errorf("protocol = %q, want %q", got, want)
+	}
+}
+
+// TestOTEL_InjectsAppleGatewayIP verifies that on the Apple backend the
+// collector endpoint uses the configured vmnet gateway IP rather than
+// host.docker.internal (which Apple containers can't resolve).
+func TestOTEL_InjectsAppleGatewayIP(t *testing.T) {
+	cfg := tracingCfg(containerService())
+	cfg.Global.ContainerBackend = config.BackendApple
+	cfg.Global.Apple.GatewayIP = "10.1.2.3"
+	env := buildEnvForService(t, cfg, "svc")
+	if got, want := env["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://10.1.2.3:4318"; got != want {
+		t.Errorf("endpoint = %q, want %q", got, want)
 	}
 }
 

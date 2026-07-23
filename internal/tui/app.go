@@ -597,6 +597,9 @@ func (m Model) viewDetail(width, height int) string {
 	}
 
 	if svcCfg != nil && snap.ServiceType == "container" {
+		if snap.Backend != "" {
+			row("Backend", snap.Backend)
+		}
 		if snap.ContainerID != "" {
 			row("Container", snap.ContainerID)
 		}

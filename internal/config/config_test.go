@@ -68,6 +68,14 @@ services:
 		t.Errorf("watch_debounce = %v, want 300ms", cfg.Global.WatchDebounce.Duration)
 	}
 
+	// Container backend defaults
+	if cfg.Global.ContainerBackend != BackendAuto {
+		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendAuto)
+	}
+	if cfg.Global.Apple.GatewayIP != "192.168.64.1" {
+		t.Errorf("apple.gateway_ip = %q, want 192.168.64.1", cfg.Global.Apple.GatewayIP)
+	}
+
 	// Service defaults
 	svc := cfg.Services["web"]
 	if svc.Restart.Policy != "never" {
@@ -76,6 +84,60 @@ services:
 	if svc.Restart.Backoff.Duration != 1*time.Second {
 		t.Errorf("restart.backoff = %v, want 1s", svc.Restart.Backoff.Duration)
 	}
+}
+
+func TestParse_ContainerBackendOverride(t *testing.T) {
+	yaml := []byte(`
+version: 1
+global:
+  container_backend: apple
+  apple:
+    gateway_ip: 10.0.0.1
+services:
+  db:
+    container:
+      image: postgres:16
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Global.ContainerBackend != BackendApple {
+		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendApple)
+	}
+	if cfg.Global.Apple.GatewayIP != "10.0.0.1" {
+		t.Errorf("apple.gateway_ip = %q, want 10.0.0.1", cfg.Global.Apple.GatewayIP)
+	}
+}
+
+func TestValidate_InvalidContainerBackend(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Global:  GlobalConfig{ContainerBackend: "podman"},
+		Services: map[string]ServiceConfig{
+			"db": {Container: &ContainerConfig{Image: "postgres:16"}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid container_backend")
+	}
+	assertContains(t, err.Error(), "invalid container_backend")
+}
+
+func TestValidate_InvalidAppleGatewayIP(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Global:  GlobalConfig{Apple: AppleConfig{GatewayIP: "not-an-ip"}},
+		Services: map[string]ServiceConfig{
+			"db": {Container: &ContainerConfig{Image: "postgres:16"}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid apple.gateway_ip")
+	}
+	assertContains(t, err.Error(), "apple.gateway_ip")
 }
 
 func TestParse_CommandAsString(t *testing.T) {

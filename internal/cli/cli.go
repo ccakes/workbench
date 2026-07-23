@@ -309,10 +309,11 @@ func runUp(args []string) int {
 		applyProfileFilter(cfg, profiles)
 	}
 
-	// Check Docker availability if any container services exist
+	// Check container backend availability if any container services exist.
 	for _, svc := range cfg.Services {
 		if svc.IsContainer() {
-			if err := runner.CheckDocker(); err != nil {
+			backend := runner.ResolveBackend(cfg.Global)
+			if err := backend.Available(); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				return 1
 			}
@@ -839,10 +840,11 @@ func runStatus(args []string) int {
 
 	// Table output
 	order, _ := cfg.StartOrder()
-	fmt.Printf("%-20s %-10s %-12s %-10s %s\n", "SERVICE", "TYPE", "STATUS", "RESTARTS", "COMMAND/IMAGE")
-	fmt.Printf("%-20s %-10s %-12s %-10s %s\n",
+	backendName := runner.ResolveBackend(cfg.Global).Name()
+	fmt.Printf("%-20s %-17s %-12s %-10s %s\n", "SERVICE", "TYPE", "STATUS", "RESTARTS", "COMMAND/IMAGE")
+	fmt.Printf("%-20s %-17s %-12s %-10s %s\n",
 		strings.Repeat("-", 20),
-		strings.Repeat("-", 10),
+		strings.Repeat("-", 17),
 		strings.Repeat("-", 12),
 		strings.Repeat("-", 10),
 		strings.Repeat("-", 30))
@@ -856,12 +858,12 @@ func runStatus(args []string) int {
 		svcType := "process"
 		cmdStr := ""
 		if svc.IsContainer() {
-			svcType = "container"
+			svcType = typeLabel("container", backendName)
 			cmdStr = svc.Container.Image
 		} else if svc.Command != nil {
 			cmdStr = svc.Command.String()
 		}
-		fmt.Printf("%-20s %-10s %-12s %-10s %s\n",
+		fmt.Printf("%-20s %-17s %-12s %-10s %s\n",
 			key,
 			svcType,
 			status,
@@ -955,10 +957,10 @@ func statusFromRunning(client *api.Client, jsonOut, showWhy bool, serviceFilter 
 		}
 	}
 
-	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %-12s %s\n", "SERVICE", "TYPE", "STATUS", "PID", "RESTARTS", "UPTIME", "REASON")
-	fmt.Printf("%-20s %-10s %-12s %-8s %-10s %-12s %s\n",
+	fmt.Printf("%-20s %-17s %-12s %-8s %-10s %-12s %s\n", "SERVICE", "TYPE", "STATUS", "PID", "RESTARTS", "UPTIME", "REASON")
+	fmt.Printf("%-20s %-17s %-12s %-8s %-10s %-12s %s\n",
 		strings.Repeat("-", 20),
-		strings.Repeat("-", 10),
+		strings.Repeat("-", 17),
 		strings.Repeat("-", 12),
 		strings.Repeat("-", 8),
 		strings.Repeat("-", 10),
@@ -975,9 +977,9 @@ func statusFromRunning(client *api.Client, jsonOut, showWhy bool, serviceFilter 
 			uptime = svc.Uptime
 		}
 		reason := statusReason(svc, showWhy)
-		fmt.Printf("%-20s %-10s %-12s %-8s %-10d %-12s %s\n",
+		fmt.Printf("%-20s %-17s %-12s %-8s %-10d %-12s %s\n",
 			svc.Key,
-			svc.Type,
+			typeLabel(svc.Type, svc.Backend),
 			svc.Status,
 			pid,
 			svc.RestartCount,
@@ -985,6 +987,15 @@ func statusFromRunning(client *api.Client, jsonOut, showWhy bool, serviceFilter 
 			reason)
 	}
 	return 0
+}
+
+// typeLabel renders a service's type for status tables, appending the container
+// backend (e.g. "container/apple") so the active runtime is visible.
+func typeLabel(svcType, backend string) string {
+	if svcType == "container" && backend != "" {
+		return svcType + "/" + backend
+	}
+	return svcType
 }
 
 // statusReason picks a short, single-line reason to show in the REASON column.
@@ -1018,6 +1029,7 @@ func statusJSON(cfg *config.Config) int {
 	type svcStatus struct {
 		Key       string `json:"key"`
 		Type      string `json:"type"`
+		Backend   string `json:"backend,omitempty"`
 		Command   string `json:"command,omitempty"`
 		Image     string `json:"image,omitempty"`
 		Dir       string `json:"dir,omitempty"`
@@ -1025,6 +1037,7 @@ func statusJSON(cfg *config.Config) int {
 	}
 	var services []svcStatus
 	order, _ := cfg.StartOrder()
+	backendName := runner.ResolveBackend(cfg.Global).Name()
 	for _, key := range order {
 		svc := cfg.Services[key]
 		s := svcStatus{
@@ -1034,6 +1047,7 @@ func statusJSON(cfg *config.Config) int {
 		}
 		if svc.IsContainer() {
 			s.Type = "container"
+			s.Backend = backendName
 			s.Image = svc.Container.Image
 		} else {
 			s.Type = "process"

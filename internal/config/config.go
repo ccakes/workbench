@@ -12,6 +12,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Container backend identifiers for GlobalConfig.ContainerBackend.
+const (
+	BackendDocker = "docker"
+	BackendApple  = "apple"
+	BackendAuto   = "auto"
+)
+
 type Config struct {
 	Version  int                      `yaml:"version"`
 	Extends  string                   `yaml:"extends"`
@@ -26,7 +33,20 @@ type GlobalConfig struct {
 	Env             map[string]string `yaml:"env"`
 	EnvFile         string            `yaml:"env_file"`
 	ContainerPrefix string            `yaml:"container_prefix"`
-	Tracing         TracingConfig     `yaml:"tracing"`
+	// ContainerBackend selects the runtime for container services:
+	// "docker", "apple", or "auto" (default). "auto" prefers Apple's
+	// `container` on Apple silicon when installed, otherwise Docker.
+	ContainerBackend string        `yaml:"container_backend"`
+	Apple            AppleConfig   `yaml:"apple"`
+	Tracing          TracingConfig `yaml:"tracing"`
+}
+
+// AppleConfig holds settings specific to the Apple `container` backend.
+type AppleConfig struct {
+	// GatewayIP is the vmnet gateway address a container uses to reach services
+	// on the macOS host (e.g. the OTLP trace collector). Defaults to
+	// 192.168.64.1, the `container` default subnet gateway.
+	GatewayIP string `yaml:"gateway_ip"`
 }
 
 // Duration wraps time.Duration for YAML unmarshaling from strings like "10s".
@@ -631,6 +651,12 @@ func mergeGlobal(p, c GlobalConfig) GlobalConfig {
 	if c.ContainerPrefix != "" {
 		out.ContainerPrefix = c.ContainerPrefix
 	}
+	if c.ContainerBackend != "" {
+		out.ContainerBackend = c.ContainerBackend
+	}
+	if c.Apple.GatewayIP != "" {
+		out.Apple.GatewayIP = c.Apple.GatewayIP
+	}
 	out.Tracing = mergeTracing(p.Tracing, c.Tracing)
 	if len(c.Env) > 0 {
 		merged := make(map[string]string, len(p.Env)+len(c.Env))
@@ -676,6 +702,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Global.Tracing.BufferSize == 0 {
 		c.Global.Tracing.BufferSize = ByteSize(500 * 1024 * 1024)
+	}
+	if c.Global.ContainerBackend == "" {
+		c.Global.ContainerBackend = BackendAuto
+	}
+	if c.Global.Apple.GatewayIP == "" {
+		c.Global.Apple.GatewayIP = "192.168.64.1"
 	}
 	for key, svc := range c.Services {
 		if svc.Restart.Policy == "" {

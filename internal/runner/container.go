@@ -12,83 +12,70 @@ import (
 	"github.com/ccakes/workbench/internal/logbuf"
 )
 
-// ContainerRunner manages a Docker container lifecycle.
+// logDrainGrace is how long the exit goroutine waits for the log follower to
+// drain naturally after the container stops before force-killing it. Docker's
+// `logs --follow` exits on stop; some `container logs -f` cases may not.
+const logDrainGrace = 2 * time.Second
+
+// ContainerRunner manages a container lifecycle via a ContainerBackend
+// (Docker or Apple's `container`).
 type ContainerRunner struct {
 	cfg         config.ServiceConfig
+	backend     ContainerBackend
 	containerID string
 	name        string
 	logCmd      *exec.Cmd
 }
 
-func NewContainerRunner(cfg config.ServiceConfig, serviceKey string, prefix string) *ContainerRunner {
+func NewContainerRunner(cfg config.ServiceConfig, serviceKey, prefix string, backend ContainerBackend) *ContainerRunner {
 	return &ContainerRunner{
-		cfg:  cfg,
-		name: prefix + "-" + serviceKey,
+		cfg:     cfg,
+		backend: backend,
+		name:    prefix + "-" + serviceKey,
 	}
 }
 
 func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.Bus, key string) (<-chan int, error) {
 	cc := r.cfg.Container
+	bin := r.backend.Binary()
 
-	// Clean up any stale container with same name.
-	// -v also removes the container's anonymous volumes (e.g. images with a
-	// VOLUME directive like Postgres/Cassandra) to avoid leaking disk space.
-	cleanup := exec.Command("docker", "rm", "-f", "-v", r.name)
-	_ = cleanup.Run() // ignore errors — container may not exist
+	// Clean up any stale container with the same name (force removal).
+	_ = exec.Command(bin, r.backend.RemoveArgs(r.name, true)...).Run() // ignore errors — container may not exist
 
-	// Build docker run args. host-gateway maps host.docker.internal to the
-	// host so containers can reach host-side services (e.g. the OTLP trace
-	// collector). Some runtimes provide this alias automatically; adding it
-	// explicitly makes it portable to plain Docker on Linux.
-	args := []string{"run", "-d", "--name", r.name, "--label", "managed-by=bench",
-		"--add-host", "host.docker.internal:host-gateway"}
-
-	// Environment variables from env slice (already merged by supervisor)
-	for _, e := range env {
-		// Only pass non-system env vars — filter to config-specified keys
-		args = append(args, "-e", e)
-	}
-
-	for _, p := range cc.Ports {
-		args = append(args, "-p", p)
-	}
-	for _, v := range cc.Volumes {
-		args = append(args, "-v", v)
-	}
-	if cc.Network != "" {
-		args = append(args, "--network", cc.Network)
-	}
-
-	args = append(args, cc.Image)
-
-	if len(cc.Command.Parts) > 0 {
-		args = append(args, cc.Command.Parts...)
+	spec := RunSpec{
+		Name:    r.name,
+		Labels:  []string{"managed-by=bench"},
+		Env:     env, // already merged by supervisor
+		Ports:   cc.Ports,
+		Volumes: cc.Volumes,
+		Network: cc.Network,
+		Image:   cc.Image,
+		Command: cc.Command.Parts,
 	}
 
 	// Run container
-	cmd := exec.Command("docker", args...)
-	out, err := cmd.Output()
+	out, err := exec.Command(bin, r.backend.RunArgs(spec)...).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(exitErr.Stderr)))
+			return nil, fmt.Errorf("%s run failed: %s", bin, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		return nil, fmt.Errorf("docker run: %w", err)
+		return nil, fmt.Errorf("%s run: %w", bin, err)
 	}
 	r.containerID = strings.TrimSpace(string(out))
 	// containerID stores the full ID; Info() returns the short form
 
 	// Stream logs
-	r.logCmd = exec.Command("docker", "logs", "--follow", r.containerID)
+	r.logCmd = exec.Command(bin, r.backend.LogsArgs(r.containerID)...)
 	stdout, err := r.logCmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("docker logs stdout pipe: %w", err)
+		return nil, fmt.Errorf("%s logs stdout pipe: %w", bin, err)
 	}
 	stderr, err := r.logCmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("docker logs stderr pipe: %w", err)
+		return nil, fmt.Errorf("%s logs stderr pipe: %w", bin, err)
 	}
 	if err := r.logCmd.Start(); err != nil {
-		return nil, fmt.Errorf("docker logs: %w", err)
+		return nil, fmt.Errorf("%s logs: %w", bin, err)
 	}
 
 	var pipeWg sync.WaitGroup
@@ -96,28 +83,29 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 	go readPipe(logs, bus, key, stdout, "stdout", events.StreamStdout, &pipeWg)
 	go readPipe(logs, bus, key, stderr, "stderr", events.StreamStderr, &pipeWg)
 
+	logsDone := make(chan struct{})
+	go func() {
+		pipeWg.Wait()
+		close(logsDone)
+	}()
+
 	// Wait for container exit
 	exitCh := make(chan int, 1)
 	go func() {
-		// docker wait returns the exit code
-		waitCmd := exec.Command("docker", "wait", r.containerID)
-		out, err := waitCmd.Output()
-		// Once container exits, log streaming will end naturally
-		pipeWg.Wait()
+		code := r.backend.WaitExit(r.containerID)
 
-		code := 0
-		if err != nil {
-			code = -1
-		} else {
-			trimmed := strings.TrimSpace(string(out))
-			_, _ = fmt.Sscanf(trimmed, "%d", &code)
+		// The container has exited. Give the log follower a moment to drain
+		// naturally (Docker's `logs --follow` exits on stop); if it doesn't,
+		// force it down so the pipes close and readPipe returns.
+		select {
+		case <-logsDone:
+		case <-time.After(logDrainGrace):
 		}
-
-		// Clean up log follower
 		if r.logCmd.Process != nil {
 			_ = r.logCmd.Process.Kill()
 			_ = r.logCmd.Wait()
 		}
+		<-logsDone
 
 		exitCh <- code
 	}()
@@ -129,24 +117,22 @@ func (r *ContainerRunner) Stop(exitCh <-chan int, timeout time.Duration) {
 	if r.containerID == "" {
 		return
 	}
+	bin := r.backend.Binary()
 
-	timeoutSecs := fmt.Sprintf("%d", int(timeout.Seconds()))
-	stopCmd := exec.Command("docker", "stop", "-t", timeoutSecs, r.containerID)
-	_ = stopCmd.Run()
+	_ = exec.Command(bin, r.backend.StopArgs(r.containerID, timeout)...).Run()
 
-	// Wait for exit with a grace period beyond the docker stop timeout
+	// Wait for exit with a grace period beyond the stop timeout
 	select {
 	case <-exitCh:
 	case <-time.After(timeout + 5*time.Second):
-		killCmd := exec.Command("docker", "kill", r.containerID)
-		_ = killCmd.Run()
+		_ = exec.Command(bin, r.backend.KillArgs(r.containerID)...).Run()
 		<-exitCh
 	}
 
-	// Remove container along with its anonymous volumes (-v) so repeated
-	// starts/restarts don't leak dangling volumes for VOLUME-declaring images.
-	rmCmd := exec.Command("docker", "rm", "-v", r.containerID)
-	_ = rmCmd.Run()
+	// Remove the container so repeated starts/restarts don't leave it behind.
+	// On Docker this also drops anonymous volumes (-v); the Apple backend has
+	// no equivalent flag.
+	_ = exec.Command(bin, r.backend.RemoveArgs(r.containerID, false)...).Run()
 }
 
 func (r *ContainerRunner) Info() RunnerInfo {

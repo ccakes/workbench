@@ -47,6 +47,7 @@ type ServiceStatus struct {
 	DisplayName   string   `json:"display_name"`
 	Status        string   `json:"status"`
 	Type          string   `json:"type"`
+	Backend       string   `json:"backend,omitempty"`
 	PID           int      `json:"pid,omitempty"`
 	ContainerID   string   `json:"container_id,omitempty"`
 	Image         string   `json:"image,omitempty"`
@@ -92,6 +93,7 @@ func (s *Server) buildServiceStatus(key string) ServiceStatus {
 		DisplayName:  snap.Name(),
 		Status:       snap.Status.String(),
 		Type:         snap.ServiceType,
+		Backend:      snap.Backend,
 		PID:          snap.PID,
 		ContainerID:  snap.ContainerID,
 		Image:        snap.Image,

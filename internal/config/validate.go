@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -139,6 +140,17 @@ func (c *Config) Validate() error {
 
 	if bad := invalidContainerPrefixChar.FindString(c.Global.ContainerPrefix); bad != "" {
 		errs = append(errs, fmt.Sprintf("container_prefix %q contains invalid character %q (only alphanumeric, hyphens, and underscores are allowed)", c.Global.ContainerPrefix, bad))
+	}
+
+	switch c.Global.ContainerBackend {
+	case "", BackendDocker, BackendApple, BackendAuto:
+		// valid (empty is defaulted to auto)
+	default:
+		errs = append(errs, fmt.Sprintf("invalid container_backend %q (must be %q, %q, or %q)", c.Global.ContainerBackend, BackendDocker, BackendApple, BackendAuto))
+	}
+
+	if c.Global.Apple.GatewayIP != "" && net.ParseIP(c.Global.Apple.GatewayIP) == nil {
+		errs = append(errs, fmt.Sprintf("apple.gateway_ip %q is not a valid IP address", c.Global.Apple.GatewayIP))
 	}
 
 	if c.Global.EnvFile != "" {
