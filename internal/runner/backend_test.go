@@ -130,6 +130,55 @@ func TestResolveBackend_Explicit(t *testing.T) {
 	}
 }
 
+func TestIsUnsupportedPlatformError(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{
+			// Real Apple `container` 1.1 output for an amd64-only image.
+			name: "apple no compatible variant",
+			out:  "Error: image sha256:1178cdd375f7 does not support required platforms",
+			want: true,
+		},
+		{
+			// Real Apple `container` 1.1 output when a variant exists but its
+			// binaries can't exec on the host.
+			name: "apple exec format error",
+			out:  `failed to exec [echo hi] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error"`,
+			want: true,
+		},
+		{
+			name: "docker no matching manifest",
+			out:  "no matching manifest for linux/arm64/v8 in the manifest list entries",
+			want: true,
+		},
+		{
+			name: "docker platform mismatch",
+			out:  "image with reference X was found but does not match the specified platform",
+			want: true,
+		},
+		{
+			name: "unrelated failure",
+			out:  "Error: connection refused",
+			want: false,
+		},
+		{
+			name: "empty",
+			out:  "",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isUnsupportedPlatformError(tt.out); got != tt.want {
+				t.Errorf("isUnsupportedPlatformError(%q) = %v, want %v", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseAppleInspect(t *testing.T) {
 	tests := []struct {
 		name       string

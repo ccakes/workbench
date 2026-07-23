@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -346,6 +347,13 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			ms.info.LastError = err.Error()
 			ms.info.Unlock()
 			s.setStatus(ms, service.StatusFailed, err.Error())
+
+			// A platform mismatch (e.g. an image with no arm64 variant) can
+			// never succeed on retry — fail terminally instead of looping
+			// through the restart policy.
+			if errors.Is(err, runner.ErrUnsupportedPlatform) {
+				return
+			}
 
 			// On start failure, check restart policy
 			if !s.shouldRestart(ms, 1) {

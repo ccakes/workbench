@@ -1,12 +1,47 @@
 package runner
 
 import (
+	"errors"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ccakes/workbench/internal/config"
 )
+
+// ErrUnsupportedPlatform indicates a container image has no usable variant for
+// the host architecture (e.g. an amd64-only image on Apple silicon). Retrying
+// can never succeed, so callers should treat it as a terminal failure rather
+// than restarting.
+var ErrUnsupportedPlatform = errors.New("image does not support this platform")
+
+// platformMismatchMarkers are substrings container runtimes emit when an image
+// has no usable variant for the host architecture. Matched case-insensitively;
+// best-effort, extend as runtime wording changes. Observed wording:
+//   - Apple `container` 1.1: "... does not support required platforms"; and
+//     "Exec format error" when a variant exists but its binaries can't run on
+//     the host (Rosetta can't help).
+//   - Docker: "no matching manifest for <platform>"; "does not match the
+//     specified platform".
+var platformMismatchMarkers = []string{
+	"does not support required platforms",
+	"no matching manifest",
+	"does not match the specified platform",
+	"exec format error",
+}
+
+// isUnsupportedPlatformError reports whether container-runtime output indicates
+// the image can't run on the host architecture.
+func isUnsupportedPlatformError(output string) bool {
+	low := strings.ToLower(output)
+	for _, m := range platformMismatchMarkers {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // ContainerBackend abstracts the container runtime that workbench shells out
 // to. The Docker backend preserves workbench's original behavior exactly; the

@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -57,7 +58,13 @@ func (r *ContainerRunner) Start(env []string, logs *logbuf.Buffer, bus *events.B
 	out, err := exec.Command(bin, r.backend.RunArgs(spec)...).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("%s run failed: %s", bin, strings.TrimSpace(string(exitErr.Stderr)))
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			// An image with no usable variant for this architecture will never
+			// start — surface a terminal error so the supervisor stops retrying.
+			if isUnsupportedPlatformError(stderr) {
+				return nil, fmt.Errorf("%w: image %q on %s: %s", ErrUnsupportedPlatform, cc.Image, runtime.GOARCH, stderr)
+			}
+			return nil, fmt.Errorf("%s run failed: %s", bin, stderr)
 		}
 		return nil, fmt.Errorf("%s run: %w", bin, err)
 	}

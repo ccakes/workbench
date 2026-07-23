@@ -65,6 +65,19 @@ matching gateway address.
 - **Host networking / `--add-host`** — not used by workbench on this backend;
   host access goes through the gateway IP instead.
 
+## Images without an arm64 variant
+
+Apple `container` runs images for the host architecture (arm64), using Rosetta
+to run amd64 images where possible. An image with **no usable variant** for the
+host — e.g. an amd64-only image whose binaries Rosetta can't run — fails at
+start with `does not support required platforms` or `exec format error`.
+
+Workbench treats this as a **terminal failure**: the service goes straight to
+`failed` with a clear message (`image does not support this platform: …`) and is
+*not* retried, even under `restart.policy: always`. Retrying can never succeed,
+so looping would only bury the real reason in noise. Rebuild or source a
+multi-arch (arm64) image to fix it.
+
 ## Out of scope
 
 - Building images (`container build`) — workbench only runs pre-built images.
