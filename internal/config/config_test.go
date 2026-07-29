@@ -2599,3 +2599,55 @@ func TestTransitiveDeps(t *testing.T) {
 		t.Error("expected error for unknown root")
 	}
 }
+
+func TestValidate_ContainerExecReadiness(t *testing.T) {
+	containerSvc := func(r ReadinessConfig) ServiceConfig {
+		return ServiceConfig{
+			Container: &ContainerConfig{Image: "postgres:16"},
+			Restart:   RestartConfig{Policy: "never"},
+			Readiness: r,
+		}
+	}
+
+	t.Run("valid on a container service", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"db": containerSvc(ReadinessConfig{
+				Kind:    "container_exec",
+				Command: &Command{Parts: []string{"pg_isready", "-U", "bench"}},
+			}),
+		}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected container_exec to validate, got %v", err)
+		}
+	})
+
+	t.Run("requires a command", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"db": containerSvc(ReadinessConfig{Kind: "container_exec"}),
+		}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error for missing command")
+		}
+		assertContains(t, err.Error(), "container_exec requires a command")
+	})
+
+	t.Run("rejects a process service", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     ".",
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+				Readiness: ReadinessConfig{
+					Kind:    "container_exec",
+					Command: &Command{Parts: []string{"pg_isready"}},
+				},
+			},
+		}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error for a non-container service")
+		}
+		assertContains(t, err.Error(), "container_exec requires a container service")
+	})
+}

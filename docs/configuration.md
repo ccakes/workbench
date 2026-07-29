@@ -232,15 +232,15 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 
 | Field           | Type           | Description                                                                       |
 | --------------- | -------------- | --------------------------------------------------------------------------------- |
-| `kind`          | string         | `none`, `log_pattern`, `tcp`, `http`, `exec`, or `grpc`                           |
+| `kind`          | string         | `none`, `log_pattern`, `tcp`, `http`, `exec`, `container_exec`, or `grpc`         |
 | `pattern`       | string         | Go regular expression matched against log lines (for `log_pattern`)               |
 | `address`       | string         | TCP address to dial, `host:port` (for `tcp` and `grpc`)                           |
 | `url`           | string         | HTTP URL to GET; any 2xx response means ready (for `http`)                        |
-| `command`       | string or list | Shell command or argv to run (for `exec`); exit 0 = ready                         |
+| `command`       | string or list | Shell command or argv to run (for `exec` and `container_exec`); exit 0 = ready    |
 | `service`       | string         | gRPC service name (for `grpc`); empty = overall server health                     |
 | `timeout`       | duration       | Per-attempt probe timeout (default `2s`)                                          |
 | `initial_delay` | duration       | Delay before the first probe attempt                                              |
-| `interval`      | duration       | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
+| `interval`      | duration       | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec`, `container_exec` |
 | `max_attempts`  | integer        | Cap on probe attempts before giving up (default `0` = unlimited)                  |
 | `settle`        | duration       | Delay between probe-success and the Ready transition                              |
 
@@ -261,9 +261,29 @@ dependents parked in Pending.
   successful connect wins.
 - **`http`** issues `GET url` using an `http.Client` with `timeout`. Any 2xx
   response marks the service Ready.
-- **`exec`** runs `command` with a `timeout` deadline per attempt. Exit 0 = ready.
-  stdout/stderr from the probe is appended to the service's log buffer tagged
-  with stream `probe`, so you can see what the probe is observing.
+- **`exec`** runs `command` on the **host** with a `timeout` deadline per attempt.
+  Exit 0 = ready. stdout/stderr from the probe is appended to the service's log
+  buffer tagged with stream `probe`, so you can see what the probe is observing.
+- **`container_exec`** runs `command` **inside the service's own container**,
+  otherwise behaving exactly like `exec`. Only valid on a service with a
+  `container:` block; `bench validate` rejects it elsewhere. Workbench supplies
+  both the container and the runtime CLI, so the probe works unchanged on either
+  [container backend](apple-container.md) and does not depend on
+  `container_prefix` or the service key:
+
+  ```yaml
+  services:
+    postgres:
+      container:
+        image: postgres:16-alpine
+      readiness:
+        kind: container_exec
+        command: pg_isready -U bench -d bench
+  ```
+
+  Prefer this over `exec` with a hand-written `docker exec <name> …`, which
+  hardcodes both the runtime and the container name and so breaks when the
+  backend resolves to Apple `container` or the prefix changes.
 - **`grpc`** issues a `grpc.health.v1.Health/Check` call against `address`. Ready
   when the server responds with status `SERVING`. Set `service` to probe a
   specific gRPC service registered for health reporting; leave it empty to

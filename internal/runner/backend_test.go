@@ -255,3 +255,61 @@ func TestParseAppleInspect(t *testing.T) {
 		})
 	}
 }
+
+func TestBackends_ExecArgs(t *testing.T) {
+	cmd := []string{"pg_isready", "-U", "bench"}
+	tests := []struct {
+		name    string
+		backend ContainerBackend
+		want    []string
+	}{
+		{"docker", dockerBackend{}, []string{"exec", "bench-db", "pg_isready", "-U", "bench"}},
+		{"apple", newAppleBackend(config.GlobalConfig{}), []string{"exec", "bench-db", "pg_isready", "-U", "bench"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.backend.ExecArgs("bench-db", cmd); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ExecArgs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	// The caller's slice must not be aliased or mutated by arg building.
+	if !reflect.DeepEqual(cmd, []string{"pg_isready", "-U", "bench"}) {
+		t.Errorf("ExecArgs mutated the caller's command slice: %v", cmd)
+	}
+}
+
+func TestContainerRunner_ExecCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend ContainerBackend
+		wantBin string
+	}{
+		{"docker", dockerBackend{}, "docker"},
+		{"apple", newAppleBackend(config.GlobalConfig{}), "container"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewContainerRunner(config.ServiceConfig{}, "postgres", "astrobot", tt.backend)
+			bin, args := r.ExecCommand([]string{"pg_isready"})
+			if bin != tt.wantBin {
+				t.Errorf("bin = %q, want %q", bin, tt.wantBin)
+			}
+			// Targets the prefix-derived name, and works before Start() has
+			// assigned a container id.
+			want := []string{"exec", "astrobot-postgres", "pg_isready"}
+			if !reflect.DeepEqual(args, want) {
+				t.Errorf("args = %v, want %v", args, want)
+			}
+		})
+	}
+}
+
+// ContainerRunner must satisfy ContainerExecer for the container_exec probe to
+// find it via type assertion; ProcessRunner must not.
+func TestContainerExecerImplementations(t *testing.T) {
+	var _ ContainerExecer = (*ContainerRunner)(nil)
+	if _, ok := any(NewProcessRunner(config.ServiceConfig{})).(ContainerExecer); ok {
+		t.Error("ProcessRunner must not implement ContainerExecer")
+	}
+}

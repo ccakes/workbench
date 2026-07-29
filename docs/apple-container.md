@@ -50,6 +50,26 @@ container services automatically. If you've changed the `container` default
 subnet (in `~/.config/container/config.toml`), set `apple.gateway_ip` to the
 matching gateway address.
 
+## Readiness probes that exec into a container
+
+Use `kind: container_exec` rather than `kind: exec` with a hand-written `docker
+exec`. Workbench supplies the container and the backend's CLI, so the probe is
+portable across backends:
+
+```yaml
+readiness:
+  kind: container_exec
+  command: pg_isready -U bench -d bench
+```
+
+A probe written as `kind: exec` with `command: docker exec my-postgres
+pg_isready …` keeps working on Docker but fails here — the container isn't in
+Docker's namespace, so every attempt reports `No such container: my-postgres`
+until `max_attempts` is exhausted. The service itself is usually healthy the
+whole time; only the probe is broken. If a readiness failure appears right after
+switching backends, check the log buffer's `probe` lines for `No such
+container` — that's this, and `container_exec` is the fix.
+
 ## Differences from Docker
 
 - **Isolation** — one lightweight VM per container, rather than shared-kernel

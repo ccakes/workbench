@@ -398,8 +398,13 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		if last := ms.logs.Last(1); len(last) == 1 {
 			baseline = last[0].Seq
 		}
+		// Resolved before the goroutine starts so the probe never races the
+		// runLoop for ms.r. Process runners don't implement ContainerExecer,
+		// which leaves execer nil and makes container_exec fail with a clear
+		// message rather than silently probing nothing.
+		execer, _ := ms.r.(runner.ContainerExecer)
 		probeWG.Go(func() {
-			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline) {
+			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline, execer) {
 				if probeCtx.Err() == nil {
 					ms.mu.Lock()
 					ms.startupErr = readinessFailureReason(ms.cfg.Readiness)

@@ -80,6 +80,10 @@ func (appleBackend) RemoveArgs(target string, force bool) []string {
 	return append(args, target)
 }
 
+func (appleBackend) ExecArgs(id string, cmd []string) []string {
+	return append([]string{"exec", id}, cmd...)
+}
+
 // WaitExit polls `container inspect` until the container leaves the running
 // state, then reports its exit code. `container` has no `wait` subcommand.
 //

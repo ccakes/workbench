@@ -70,6 +70,11 @@ type ContainerBackend interface {
 	KillArgs(id string) []string
 	// RemoveArgs builds the args to remove a container by name or id.
 	RemoveArgs(target string, force bool) []string
+	// ExecArgs builds the args to run a command inside a running container.
+	// Both current backends spell this the same way, but routing it through the
+	// interface is what lets the container_exec readiness probe stay portable:
+	// bench.yml names the command to run, never the CLI that runs it.
+	ExecArgs(id string, cmd []string) []string
 	// WaitExit blocks until the container terminates and returns its exit code.
 	// The strategy differs per backend (Docker `wait` vs polling `inspect`).
 	WaitExit(id string) int

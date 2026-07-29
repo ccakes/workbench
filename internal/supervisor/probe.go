@@ -17,6 +17,7 @@ import (
 
 	"github.com/ccakes/workbench/internal/config"
 	"github.com/ccakes/workbench/internal/logbuf"
+	"github.com/ccakes/workbench/internal/runner"
 )
 
 const (
@@ -37,7 +38,10 @@ const (
 // exit codes. On success, the configured `settle` delay is observed before
 // returning true so dependents do not unblock during the gap between
 // "probe passed" and "service really ready."
-func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buffer, baselineSeq uint64) bool {
+//
+// execer supplies the container-exec invocation for the container_exec kind and
+// is nil for process services; every other kind ignores it.
+func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buffer, baselineSeq uint64, execer runner.ContainerExecer) bool {
 	kind := cfg.Kind
 	if kind == "" || kind == "none" {
 		return true
@@ -85,6 +89,26 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 			return false
 		}
 		parts := cfg.Command.Parts
+		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
+			return probeExecOnce(ctx, parts, perAttempt, logs)
+		})
+	case "container_exec":
+		if cfg.Command == nil || len(cfg.Command.Parts) == 0 {
+			if logs != nil {
+				logs.Add("stderr", "readiness: container_exec kind requires a command")
+			}
+			return false
+		}
+		if execer == nil {
+			if logs != nil {
+				logs.Add("stderr", "readiness: container_exec is only valid for a container service")
+			}
+			return false
+		}
+		// Resolve the invocation once: both the container name and the backend
+		// CLI are fixed for the life of this probe.
+		bin, execArgs := execer.ExecCommand(cfg.Command.Parts)
+		parts := append([]string{bin}, execArgs...)
 		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
 			return probeExecOnce(ctx, parts, perAttempt, logs)
 		})

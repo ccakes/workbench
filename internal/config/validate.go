@@ -93,7 +93,7 @@ func (c *Config) Validate() error {
 		}
 
 		switch svc.Readiness.Kind {
-		case "", "none", "log_pattern", "tcp", "http", "exec", "grpc":
+		case "", "none", "log_pattern", "tcp", "http", "exec", "container_exec", "grpc":
 			// valid
 		default:
 			errs = append(errs, fmt.Sprintf("%s: invalid readiness kind %q", prefix, svc.Readiness.Kind))
@@ -110,6 +110,17 @@ func (c *Config) Validate() error {
 		}
 		if svc.Readiness.Kind == "exec" && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind exec requires a command", prefix))
+		}
+		if svc.Readiness.Kind == "container_exec" {
+			if svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: readiness kind container_exec requires a command", prefix))
+			}
+			// The probe runs inside the service's own container, so there has to
+			// be one. Caught here rather than at runtime because it can only ever
+			// be a config mistake.
+			if !svc.IsContainer() {
+				errs = append(errs, fmt.Sprintf("%s: readiness kind container_exec requires a container service", prefix))
+			}
 		}
 		if svc.Readiness.Kind == "grpc" && svc.Readiness.Address == "" {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind grpc requires an address", prefix))

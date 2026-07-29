@@ -114,8 +114,12 @@ common stuff, not an exhaustive reference.
 - Status flow: `pending → starting → running → [setup →] ready`. The optional
   `setup` step runs a per-service bootstrap command after the readiness probe
   passes; dependents wait for `ready`.
-- Readiness probe kinds: `tcp`, `http`, `log_pattern`, `exec`, `grpc`. Probe
-  stdout/stderr appears in the service log buffer tagged with stream `probe`.
+- Readiness probe kinds: `tcp`, `http`, `log_pattern`, `exec`, `container_exec`,
+  `grpc`. Probe stdout/stderr appears in the service log buffer tagged with
+  stream `probe`. `exec` runs on the host; `container_exec` runs inside the
+  service's own container and is the portable way to probe a container (it
+  supplies the container name and the backend CLI, so it needs no `docker exec`
+  prefix and works on both container backends).
 - Log buffers are ring buffers — old lines rotate out.
 - Unknown YAML fields are rejected; a typo like `expect_status` under
   `readiness:` fails validation rather than silently being ignored.

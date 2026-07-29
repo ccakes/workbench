@@ -142,6 +142,16 @@ func (r *ContainerRunner) Stop(exitCh <-chan int, timeout time.Duration) {
 	_ = exec.Command(bin, r.backend.RemoveArgs(r.containerID, false)...).Run()
 }
 
+// ExecCommand returns the binary and arguments that run cmd inside this
+// service's container, satisfying ContainerExecer.
+//
+// It targets the container by name rather than by id: the name is derived from
+// the configured prefix and service key at construction, so it is available
+// before Start() has assigned an id and stays valid across restarts.
+func (r *ContainerRunner) ExecCommand(cmd []string) (string, []string) {
+	return r.backend.Binary(), r.backend.ExecArgs(r.name, cmd)
+}
+
 func (r *ContainerRunner) Info() RunnerInfo {
 	shortID := r.containerID
 	if len(shortID) > 12 {

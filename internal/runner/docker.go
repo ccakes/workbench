@@ -50,6 +50,10 @@ func (dockerBackend) RemoveArgs(target string, force bool) []string {
 	return append(args, "-v", target)
 }
 
+func (dockerBackend) ExecArgs(id string, cmd []string) []string {
+	return append([]string{"exec", id}, cmd...)
+}
+
 func (dockerBackend) WaitExit(id string) int {
 	// `docker wait` blocks until the container exits and prints the exit code.
 	out, err := exec.Command("docker", "wait", id).Output()
