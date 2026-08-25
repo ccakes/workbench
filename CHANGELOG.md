@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Apple `container` is now supported as an alternative container backend on
+  Apple silicon (macOS 26+). Select it with the new global `container_backend`
+  setting (`docker`, `apple`, or `auto`). Docker remains the default; Apple and
+  automatic selection are opt-in. Container services run unchanged on either
+  backend. The TUI and `bench status` show the active backend. See
+  `docs/apple-container.md`.
+- Container images with no usable variant for the host architecture (e.g. an
+  amd64-only image on Apple silicon) now fail terminally with a clear message
+  instead of looping through the restart policy.
+- New readiness kind `container_exec` runs a command inside the service's own
+  container. Workbench supplies the container name and the backend's CLI, so
+  `command: pg_isready -U bench` works unchanged on either container backend —
+  unlike `kind: exec` with a hand-written `docker exec <name> …`, which breaks
+  when the backend resolves to Apple `container` or `container_prefix` changes.
+  See `docs/configuration.md`.
+- Setup hooks now support `kind: exec` and `kind: container_exec`, using the
+  same configuration as readiness hooks. Existing command-only setup hooks
+  remain host-side `exec` hooks and emit a deprecation warning.
+
 ## [0.6.10] - 2026-07-07
 
 ### Fixed

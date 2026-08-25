@@ -110,7 +110,7 @@ common stuff, not an exhaustive reference.
 ## Notes worth knowing
 
 - Services are either processes (`command:`) or containers (`container:`);
-  containers need Docker running.
+  containers use Docker by default, with Apple and `auto` available by config.
 - Status flow: `pending → starting → running → [setup →] ready`. The optional
   `setup` step runs a host `exec` or service `container_exec` bootstrap command
   after the readiness probe passes; dependents wait for `ready`.

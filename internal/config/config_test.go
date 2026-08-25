@@ -70,8 +70,8 @@ services:
 	}
 
 	// Container backend defaults
-	if cfg.Global.ContainerBackend != BackendAuto {
-		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendAuto)
+	if cfg.Global.ContainerBackend != BackendDocker {
+		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendDocker)
 	}
 	if cfg.Global.Apple.GatewayIP != "192.168.64.1" {
 		t.Errorf("apple.gateway_ip = %q, want 192.168.64.1", cfg.Global.Apple.GatewayIP)

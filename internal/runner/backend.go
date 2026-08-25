@@ -101,22 +101,20 @@ type RunSpec struct {
 const containerPollInterval = 250 * time.Millisecond
 
 // ResolveBackend selects the container backend from global config.
-// config.BackendDocker and config.BackendApple are explicit; config.BackendAuto
-// (the default) prefers Apple's `container` on Apple silicon when the binary is
-// installed, otherwise Docker. Selection is pure and side-effect-free — the
-// environment/daemon health check happens later in Available().
+// Docker is the default. config.BackendAuto prefers Apple's `container` on
+// Apple silicon when the binary is installed. Selection is pure and
+// side-effect-free; the daemon health check happens later in Available().
 func ResolveBackend(g config.GlobalConfig) ContainerBackend {
 	switch g.ContainerBackend {
-	case config.BackendDocker:
-		return dockerBackend{}
 	case config.BackendApple:
 		return newAppleBackend(g)
-	default: // BackendAuto or unset
+	case config.BackendAuto:
 		if isAppleSilicon() && appleContainerInstalled() {
 			return newAppleBackend(g)
 		}
-		return dockerBackend{}
 	}
+
+	return dockerBackend{}
 }
 
 // buildRunArgs assembles a detached-run argument list shared by both backends.

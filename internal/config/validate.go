@@ -173,7 +173,7 @@ func (c *Config) Validate() error {
 
 	switch c.Global.ContainerBackend {
 	case "", BackendDocker, BackendApple, BackendAuto:
-		// valid (empty is defaulted to auto)
+		// valid (empty is defaulted to Docker)
 	default:
 		errs = append(errs, fmt.Sprintf("invalid container_backend %q (must be %q, %q, or %q)", c.Global.ContainerBackend, BackendDocker, BackendApple, BackendAuto))
 	}

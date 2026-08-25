@@ -35,8 +35,8 @@ type GlobalConfig struct {
 	EnvFile         string            `yaml:"env_file"`
 	ContainerPrefix string            `yaml:"container_prefix"`
 	// ContainerBackend selects the runtime for container services:
-	// "docker", "apple", or "auto" (default). "auto" prefers Apple's
-	// `container` on Apple silicon when installed, otherwise Docker.
+	// "docker" (default), "apple", or "auto". "auto" prefers Apple's
+	// `container` on Apple silicon when installed.
 	ContainerBackend string        `yaml:"container_backend"`
 	Apple            AppleConfig   `yaml:"apple"`
 	Tracing          TracingConfig `yaml:"tracing"`
@@ -703,7 +703,7 @@ func (c *Config) applyDefaults() {
 		c.Global.Tracing.BufferSize = ByteSize(500 * 1024 * 1024)
 	}
 	if c.Global.ContainerBackend == "" {
-		c.Global.ContainerBackend = BackendAuto
+		c.Global.ContainerBackend = BackendDocker
 	}
 	if c.Global.Apple.GatewayIP == "" {
 		c.Global.Apple.GatewayIP = "192.168.64.1"

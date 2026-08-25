@@ -122,6 +122,9 @@ func TestBackends_OTELHost(t *testing.T) {
 }
 
 func TestResolveBackend_Explicit(t *testing.T) {
+	if got := ResolveBackend(config.GlobalConfig{}).Name(); got != "docker" {
+		t.Errorf("default => %q", got)
+	}
 	if got := ResolveBackend(config.GlobalConfig{ContainerBackend: config.BackendDocker}).Name(); got != "docker" {
 		t.Errorf("docker => %q", got)
 	}

@@ -23,16 +23,16 @@ on either backend. Only the global `container_backend` setting differs.
 
 ```yaml
 global:
-  container_backend: auto   # docker | apple | auto (default)
+  container_backend: apple   # docker (default) | apple | auto
   apple:
     gateway_ip: 192.168.64.1
 ```
 
-- **`auto`** (default) — use Apple `container` when running on Apple silicon with
-  the `container` binary installed; otherwise use Docker.
-- **`docker`** — always use Docker.
+- **`docker`** (default) — always use Docker.
 - **`apple`** — always use Apple `container`. Startup fails with a clear message
   if the host doesn't meet the requirements above.
+- **`auto`** — use Apple `container` when running on Apple silicon with the
+  `container` binary installed; otherwise use Docker.
 
 The active backend is shown per container service in the TUI detail pane and in
 `bench status` (the `TYPE` column reads `container/apple` or `container/docker`,

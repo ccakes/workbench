@@ -91,7 +91,7 @@ Run `bench validate` to surface these errors without starting any services.
 | `env`              | map      |         | Global environment variables applied to all services          |
 | `env_file`         | path     |         | Global .env file loaded for all services                      |
 | `container_prefix` | string   | dirname | Prefix for container names (e.g. `{prefix}-{service}`)        |
-| `container_backend`| string   | `auto`  | Container runtime: `docker`, `apple`, or `auto`               |
+| `container_backend`| string   | `docker`| Container runtime: `docker`, `apple`, or `auto`               |
 | `apple`            | object   |         | Apple `container` backend settings                            |
 | `tracing`          | object   |         | Tracing configuration                                         |
 
@@ -102,11 +102,11 @@ on [Apple's `container`](apple-container.md) tool instead.
 
 | Field               | Type   | Default | Description                                              |
 | ------------------- | ------ | ------- | -------------------------------------------------------- |
-| `container_backend` | string | `auto`  | `docker`, `apple`, or `auto` (prefer Apple when present) |
+| `container_backend` | string | `docker`| `docker`, `apple`, or `auto` (prefer Apple when present) |
 | `apple.gateway_ip`  | string | `192.168.64.1` | Host IP an Apple container uses to reach the host |
 
-`auto` selects the Apple backend when running on Apple silicon with the
-`container` binary installed, otherwise Docker. See
+`auto` is opt-in. It selects the Apple backend when running on Apple silicon
+with the `container` binary installed, otherwise Docker. See
 [apple-container.md](apple-container.md) for requirements and caveats.
 
 #### Tracing
