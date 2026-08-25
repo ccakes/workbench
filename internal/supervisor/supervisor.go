@@ -398,7 +398,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		if last := ms.logs.Last(1); len(last) == 1 {
 			baseline = last[0].Seq
 		}
-		// Resolved before the goroutine starts so the probe never races the
+		// Resolved before the goroutine starts so startup hooks never race the
 		// runLoop for ms.r. Process runners don't implement ContainerExecer,
 		// which leaves execer nil and makes container_exec fail with a clear
 		// message rather than silently probing nothing.
@@ -418,7 +418,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			}
 			if ms.cfg.Setup != nil {
 				s.setStatus(ms, service.StatusSetup, "running setup hook")
-				if err := s.runSetupHook(probeCtx, ms); err != nil {
+				if err := s.runSetupHook(probeCtx, ms, execer); err != nil {
 					// Record the failure on the managed service. The runLoop's
 					// stop path sees startupErr and finalises as Failed (not
 					// Stopped) so the user can tell apart "I stopped this"
@@ -530,7 +530,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 	}
 }
 
-func readinessFailureReason(cfg config.ReadinessConfig) string {
+func readinessFailureReason(cfg config.ServiceHookConfig) string {
 	if cfg.MaxAttempts > 0 {
 		return fmt.Sprintf("readiness probe failed after %d attempts", cfg.MaxAttempts)
 	}

@@ -65,7 +65,7 @@ Unknown YAML fields are rejected at parse time. A typo such as `expect_status: 2
 
 ```
 error: parsing config bench.yml: parsing config: yaml: unmarshal errors:
-  line 9: field expect_status not found in type config.ReadinessConfig
+  line 9: field expect_status not found in type config.ServiceHookConfig
 ```
 
 Run `bench validate` to surface these errors without starting any services.
@@ -340,11 +340,12 @@ passes (and after any `settle` delay), before the service transitions to
 bootstrap that's logically part of bringing this service up — creating a dev
 environment in a flag service, seeding a default DB user, applying migrations.
 
-| Field     | Type           | Description                                            |
-| --------- | -------------- | ------------------------------------------------------ |
-| `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded |
-| `timeout` | duration       | Cap on setup runtime (default `60s`)                   |
-| `env`     | map            | Extra env applied on top of the service's env          |
+| Field     | Type           | Description                                                   |
+| --------- | -------------- | ------------------------------------------------------------- |
+| `kind`    | string         | `exec` (host) or `container_exec` (the service's container)   |
+| `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded        |
+| `timeout` | duration       | Cap on setup runtime (default `60s`)                          |
+| `env`     | map            | Extra environment for `exec`; unsupported by `container_exec` |
 
 ```yaml
 services:
@@ -354,9 +355,14 @@ services:
       kind: http
       url: http://localhost:4242/health
     setup:
+      kind: exec
       command: ./bin/flagman create-env development
       timeout: 30s
 ```
+
+`container_exec` is only valid for container services and uses the configured
+container backend. A legacy setup block containing `command` without `kind`
+still runs as `exec`, with a deprecation warning.
 
 The status flow is `Running → Setup → Ready`. On non-zero exit or timeout the
 supervisor stops the service and marks it **Failed** with the setup error in

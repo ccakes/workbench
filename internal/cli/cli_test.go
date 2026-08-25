@@ -104,6 +104,34 @@ services:
 	}
 }
 
+func TestRunValidateWarnsLegacySetup(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bench.yml")
+	data := []byte(`
+version: 1
+services:
+  app:
+    dir: .
+    command: echo app
+    setup:
+      command: echo setup
+`)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var code int
+	_, stderr := captureStdoutStderr(t, func() {
+		code = runValidate([]string{"-config", path})
+	})
+	if code != 0 {
+		t.Fatalf("runValidate returned %d: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "warning: service \"app\": setup.command without setup.kind is deprecated; using exec") {
+		t.Fatalf("missing deprecation warning: %s", stderr)
+	}
+}
+
 func TestApplyServiceSubset(t *testing.T) {
 	cfg := &config.Config{
 		Services: map[string]config.ServiceConfig{

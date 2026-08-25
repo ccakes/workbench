@@ -41,7 +41,7 @@ const (
 //
 // execer supplies the container-exec invocation for the container_exec kind and
 // is nil for process services; every other kind ignores it.
-func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buffer, baselineSeq uint64, execer runner.ContainerExecer) bool {
+func runProbe(ctx context.Context, cfg config.ServiceHookConfig, logs *logbuf.Buffer, baselineSeq uint64, execer runner.ContainerExecer) bool {
 	kind := cfg.Kind
 	if kind == "" || kind == "none" {
 		return true
@@ -81,34 +81,15 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
 			return probeHTTPOnce(ctx, cfg.URL, perAttempt)
 		})
-	case "exec":
-		if cfg.Command == nil || len(cfg.Command.Parts) == 0 {
+	case config.ExecKind, config.ContainerExecKind:
+		bin, args, err := resolveExec(cfg, execer)
+		if err != nil {
 			if logs != nil {
-				logs.Add("stderr", "readiness: exec kind requires a command")
+				logs.Add("stderr", "readiness: "+err.Error())
 			}
 			return false
 		}
-		parts := cfg.Command.Parts
-		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
-			return probeExecOnce(ctx, parts, perAttempt, logs)
-		})
-	case "container_exec":
-		if cfg.Command == nil || len(cfg.Command.Parts) == 0 {
-			if logs != nil {
-				logs.Add("stderr", "readiness: container_exec kind requires a command")
-			}
-			return false
-		}
-		if execer == nil {
-			if logs != nil {
-				logs.Add("stderr", "readiness: container_exec is only valid for a container service")
-			}
-			return false
-		}
-		// Resolve the invocation once: both the container name and the backend
-		// CLI are fixed for the life of this probe.
-		bin, execArgs := execer.ExecCommand(cfg.Command.Parts)
-		parts := append([]string{bin}, execArgs...)
+		parts := append([]string{bin}, args...)
 		ok = retryProbe(ctx, cfg.MaxAttempts, interval, func() bool {
 			return probeExecOnce(ctx, parts, perAttempt, logs)
 		})
@@ -131,6 +112,28 @@ func runProbe(ctx context.Context, cfg config.ReadinessConfig, logs *logbuf.Buff
 		}
 	}
 	return true
+}
+
+// resolveExec maps a portable command to its host invocation.
+func resolveExec(cfg config.ServiceHookConfig, execer runner.ContainerExecer) (string, []string, error) {
+	if cfg.Command == nil || len(cfg.Command.Parts) == 0 {
+		return "", nil, fmt.Errorf("%s kind requires a command", cfg.Kind)
+	}
+
+	switch cfg.Kind {
+	case config.ExecKind:
+		return cfg.Command.Parts[0], cfg.Command.Parts[1:], nil
+	case config.ContainerExecKind:
+		if execer == nil {
+			return "", nil, fmt.Errorf("%s is only valid for a container service", cfg.Kind)
+		}
+	default:
+		return "", nil, fmt.Errorf("invalid exec kind %q", cfg.Kind)
+	}
+
+	bin, args := execer.ExecCommand(cfg.Command.Parts)
+
+	return bin, args, nil
 }
 
 // retryProbe repeatedly invokes attempt until it returns true, ctx is

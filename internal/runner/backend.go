@@ -72,7 +72,7 @@ type ContainerBackend interface {
 	RemoveArgs(target string, force bool) []string
 	// ExecArgs builds the args to run a command inside a running container.
 	// Both current backends spell this the same way, but routing it through the
-	// interface is what lets the container_exec readiness probe stay portable:
+	// interface keeps container_exec hooks portable:
 	// bench.yml names the command to run, never the CLI that runs it.
 	ExecArgs(id string, cmd []string) []string
 	// WaitExit blocks until the container terminates and returns its exit code.

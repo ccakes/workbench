@@ -17,9 +17,9 @@ import (
 	"github.com/ccakes/workbench/internal/logbuf"
 )
 
-// helper: build a ReadinessConfig with a given kind and useful defaults for tests.
-func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.ReadinessConfig {
-	return config.ReadinessConfig{
+// helper: build a ServiceHookConfig with a given kind and useful defaults for tests.
+func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:         "tcp",
 		Address:      addr,
 		Timeout:      config.Duration{Duration: timeout},
@@ -27,16 +27,16 @@ func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.Readi
 	}
 }
 
-func httpReadiness(url string, timeout time.Duration) config.ReadinessConfig {
-	return config.ReadinessConfig{
+func httpReadiness(url string, timeout time.Duration) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:    "http",
 		URL:     url,
 		Timeout: config.Duration{Duration: timeout},
 	}
 }
 
-func logPatternReadiness(pattern string) config.ReadinessConfig {
-	return config.ReadinessConfig{
+func logPatternReadiness(pattern string) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:    "log_pattern",
 		Pattern: pattern,
 	}
@@ -287,16 +287,16 @@ func TestRunProbe_NoneKindIsInstantReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	if !runProbe(ctx, config.ReadinessConfig{Kind: ""}, nil, 0, nil) {
+	if !runProbe(ctx, config.ServiceHookConfig{Kind: ""}, nil, 0, nil) {
 		t.Error("empty kind should be instant-ready")
 	}
-	if !runProbe(ctx, config.ReadinessConfig{Kind: "none"}, nil, 0, nil) {
+	if !runProbe(ctx, config.ServiceHookConfig{Kind: "none"}, nil, 0, nil) {
 		t.Error("'none' kind should be instant-ready")
 	}
 }
 
 func TestProbeExec_ExitZeroReady(t *testing.T) {
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "exec",
 		Command: &config.Command{Parts: []string{"sh", "-c", "exit 0"}},
 		Timeout: config.Duration{Duration: 2 * time.Second},
@@ -310,7 +310,7 @@ func TestProbeExec_ExitZeroReady(t *testing.T) {
 
 func TestProbeExec_StreamsOutputToLogs(t *testing.T) {
 	buf := logbuf.New(50)
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "exec",
 		Command: &config.Command{Parts: []string{"sh", "-c", "echo hello-probe && exit 0"}},
 		Timeout: config.Duration{Duration: 2 * time.Second},
@@ -336,7 +336,7 @@ func TestProbeExec_StreamsOutputToLogs(t *testing.T) {
 
 func TestProbeExec_MaxAttemptsCap(t *testing.T) {
 	// A command that always fails should give up after MaxAttempts and return false.
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "exec",
 		Command:     &config.Command{Parts: []string{"sh", "-c", "exit 1"}},
 		Timeout:     config.Duration{Duration: 200 * time.Millisecond},
@@ -358,7 +358,7 @@ func TestProbeExec_MaxAttemptsCap(t *testing.T) {
 func TestProbeTCP_MaxAttemptsCap(t *testing.T) {
 	// Closed port + MaxAttempts=2 should bail quickly instead of looping
 	// until ctx cancellation.
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "tcp",
 		Address:     freeAddr(t),
 		Timeout:     config.Duration{Duration: 50 * time.Millisecond},
@@ -379,7 +379,7 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: listenerAddr(l),
 		Timeout: config.Duration{Duration: 200 * time.Millisecond},
@@ -400,7 +400,7 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 
 func TestProbeGRPC_Serving(t *testing.T) {
 	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_SERVING, "")
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "grpc",
 		Address: addr,
 		Timeout: config.Duration{Duration: 500 * time.Millisecond},
@@ -420,7 +420,7 @@ func TestProbeGRPC_NotServingThenSucceeds(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		grpcHealthFlip(addr, healthpb.HealthCheckResponse_SERVING)
 	}()
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:     "grpc",
 		Address:  addr,
 		Timeout:  config.Duration{Duration: 200 * time.Millisecond},
@@ -435,7 +435,7 @@ func TestProbeGRPC_NotServingThenSucceeds(t *testing.T) {
 
 func TestProbeGRPC_MaxAttemptsCap(t *testing.T) {
 	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_NOT_SERVING, "")
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "grpc",
 		Address:     addr,
 		Timeout:     config.Duration{Duration: 100 * time.Millisecond},
@@ -458,7 +458,7 @@ func TestProbeSettleCancellable(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: listenerAddr(l),
 		Timeout: config.Duration{Duration: 200 * time.Millisecond},
@@ -490,7 +490,7 @@ func TestProbeContainerExec_ForwardsCommandAndSucceeds(t *testing.T) {
 	defer cancel()
 
 	ex := &stubExecer{bin: "sh", args: []string{"-c", "exit 0"}}
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "container_exec",
 		Command:     &config.Command{Parts: []string{"pg_isready", "-U", "bench"}},
 		Timeout:     config.Duration{Duration: 2 * time.Second},
@@ -513,7 +513,7 @@ func TestProbeContainerExec_NonZeroExitFails(t *testing.T) {
 	defer cancel()
 
 	ex := &stubExecer{bin: "sh", args: []string{"-c", "exit 1"}}
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "container_exec",
 		Command:     &config.Command{Parts: []string{"pg_isready"}},
 		Timeout:     config.Duration{Duration: time.Second},
@@ -531,7 +531,7 @@ func TestProbeContainerExec_NilExecerFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "container_exec",
 		Command:     &config.Command{Parts: []string{"pg_isready"}},
 		MaxAttempts: 1,
@@ -553,7 +553,7 @@ func TestProbeContainerExec_MissingCommandFails(t *testing.T) {
 	defer cancel()
 
 	ex := &stubExecer{bin: "true"}
-	cfg := config.ReadinessConfig{Kind: "container_exec", MaxAttempts: 1}
+	cfg := config.ServiceHookConfig{Kind: "container_exec", MaxAttempts: 1}
 
 	if runProbe(ctx, cfg, buf, 0, ex) {
 		t.Fatal("expected container_exec to fail with no command")

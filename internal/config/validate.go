@@ -93,7 +93,7 @@ func (c *Config) Validate() error {
 		}
 
 		switch svc.Readiness.Kind {
-		case "", "none", "log_pattern", "tcp", "http", "exec", "container_exec", "grpc":
+		case "", "none", "log_pattern", "tcp", "http", ExecKind, ContainerExecKind, "grpc":
 			// valid
 		default:
 			errs = append(errs, fmt.Sprintf("%s: invalid readiness kind %q", prefix, svc.Readiness.Kind))
@@ -108,10 +108,10 @@ func (c *Config) Validate() error {
 		if svc.Readiness.Kind == "http" && svc.Readiness.URL == "" {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind http requires a url", prefix))
 		}
-		if svc.Readiness.Kind == "exec" && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
+		if svc.Readiness.Kind == ExecKind && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind exec requires a command", prefix))
 		}
-		if svc.Readiness.Kind == "container_exec" {
+		if svc.Readiness.Kind == ContainerExecKind {
 			if svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0 {
 				errs = append(errs, fmt.Sprintf("%s: readiness kind container_exec requires a command", prefix))
 			}
@@ -134,13 +134,31 @@ func (c *Config) Validate() error {
 		if svc.Readiness.Settle.Duration < 0 {
 			errs = append(errs, fmt.Sprintf("%s: readiness settle must be >= 0", prefix))
 		}
+		if len(svc.Readiness.Env) > 0 {
+			errs = append(errs, fmt.Sprintf("%s: readiness env is not supported", prefix))
+		}
 
 		if svc.Setup != nil {
-			if len(svc.Setup.Command.Parts) == 0 {
-				errs = append(errs, fmt.Sprintf("%s: setup requires a command", prefix))
+			switch svc.Setup.Kind {
+			case ExecKind:
+			case ContainerExecKind:
+				if !svc.IsContainer() {
+					errs = append(errs, fmt.Sprintf("%s: setup kind container_exec requires a container service", prefix))
+				}
+				if len(svc.Setup.Env) > 0 {
+					errs = append(errs, fmt.Sprintf("%s: setup env is only supported for kind exec", prefix))
+				}
+			default:
+				errs = append(errs, fmt.Sprintf("%s: invalid setup kind %q (must be exec or container_exec)", prefix, svc.Setup.Kind))
+			}
+			if svc.Setup.Command == nil || len(svc.Setup.Command.Parts) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: setup kind %s requires a command", prefix, svc.Setup.Kind))
 			}
 			if svc.Setup.Timeout.Duration < 0 {
 				errs = append(errs, fmt.Sprintf("%s: setup timeout must be >= 0", prefix))
+			}
+			if hasProbeOnlyFields(svc.Setup) {
+				errs = append(errs, fmt.Sprintf("%s: setup only supports kind, command, timeout, and env", prefix))
 			}
 		}
 	}
@@ -183,6 +201,17 @@ func (c *Config) Validate() error {
 		return &ValidationError{Errors: errs}
 	}
 	return nil
+}
+
+func hasProbeOnlyFields(cfg *ServiceHookConfig) bool {
+	return cfg.Pattern != "" ||
+		cfg.Address != "" ||
+		cfg.URL != "" ||
+		cfg.Service != "" ||
+		cfg.InitialDelay.Duration != 0 ||
+		cfg.Interval.Duration != 0 ||
+		cfg.Settle.Duration != 0 ||
+		cfg.MaxAttempts != 0
 }
 
 func (c *Config) checkCycles() error {

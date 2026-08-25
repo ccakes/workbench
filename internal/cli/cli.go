@@ -179,7 +179,15 @@ func loadConfig(configPath string) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return config.Load(path)
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, warning := range cfg.Warnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+
+	return cfg, nil
 }
 
 // connectToRunning attempts to connect to a running bench instance.

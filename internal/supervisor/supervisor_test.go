@@ -764,7 +764,7 @@ func TestReadiness_TCPReachesReady(t *testing.T) {
 	l := openTCPListener(t)
 
 	svc := longRunningSvc(dir)
-	svc.Readiness = config.ReadinessConfig{
+	svc.Readiness = config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: l.Addr().String(),
 		Timeout: config.Duration{Duration: 500 * time.Millisecond},
@@ -807,7 +807,7 @@ func TestReadiness_DependentWaitsForReady(t *testing.T) {
 	addr := reservedAddr(t)
 
 	depSvc := longRunningSvc(dir)
-	depSvc.Readiness = config.ReadinessConfig{
+	depSvc.Readiness = config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: addr,
 		Timeout: config.Duration{Duration: 200 * time.Millisecond},
@@ -933,7 +933,7 @@ func TestReadiness_ProbeGoroutineExitsOnStop(t *testing.T) {
 	dir := t.TempDir()
 
 	svc := longRunningSvc(dir)
-	svc.Readiness = config.ReadinessConfig{
+	svc.Readiness = config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: reservedAddr(t), // never-listening
 		Timeout: config.Duration{Duration: 100 * time.Millisecond},
@@ -986,7 +986,7 @@ func TestReadiness_MaxAttemptsMarksServiceFailed(t *testing.T) {
 	dir := t.TempDir()
 
 	svc := longRunningSvc(dir)
-	svc.Readiness = config.ReadinessConfig{
+	svc.Readiness = config.ServiceHookConfig{
 		Kind:        "tcp",
 		Address:     reservedAddr(t),
 		Timeout:     config.Duration{Duration: 50 * time.Millisecond},
@@ -1202,8 +1202,9 @@ func TestSetupHook_RunsBetweenProbeAndReady(t *testing.T) {
 	marker := dir + "/setup-marker"
 
 	svc := longRunningSvc(dir)
-	svc.Setup = &config.SetupConfig{
-		Command: config.Command{Shell: true, Parts: []string{"sh", "-c", "touch " + marker}},
+	svc.Setup = &config.ServiceHookConfig{
+		Kind:    config.ExecKind,
+		Command: &config.Command{Shell: true, Parts: []string{"sh", "-c", "touch " + marker}},
 		Timeout: config.Duration{Duration: 5 * time.Second},
 	}
 
@@ -1242,8 +1243,9 @@ func TestSetupHook_FailureMarksServiceFailed(t *testing.T) {
 	dir := t.TempDir()
 
 	svc := longRunningSvc(dir)
-	svc.Setup = &config.SetupConfig{
-		Command: config.Command{Shell: true, Parts: []string{"sh", "-c", "echo setup-bad >&2; exit 7"}},
+	svc.Setup = &config.ServiceHookConfig{
+		Kind:    config.ExecKind,
+		Command: &config.Command{Shell: true, Parts: []string{"sh", "-c", "echo setup-bad >&2; exit 7"}},
 		Timeout: config.Duration{Duration: 5 * time.Second},
 	}
 

@@ -112,8 +112,8 @@ common stuff, not an exhaustive reference.
 - Services are either processes (`command:`) or containers (`container:`);
   containers need Docker running.
 - Status flow: `pending → starting → running → [setup →] ready`. The optional
-  `setup` step runs a per-service bootstrap command after the readiness probe
-  passes; dependents wait for `ready`.
+  `setup` step runs a host `exec` or service `container_exec` bootstrap command
+  after the readiness probe passes; dependents wait for `ready`.
 - Readiness probe kinds: `tcp`, `http`, `log_pattern`, `exec`, `container_exec`,
   `grpc`. Probe stdout/stderr appears in the service log buffer tagged with
   stream `probe`. `exec` runs on the host; `container_exec` runs inside the

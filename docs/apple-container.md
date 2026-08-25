@@ -50,11 +50,11 @@ container services automatically. If you've changed the `container` default
 subnet (in `~/.config/container/config.toml`), set `apple.gateway_ip` to the
 matching gateway address.
 
-## Readiness probes that exec into a container
+## Commands that exec into a container
 
 Use `kind: container_exec` rather than `kind: exec` with a hand-written `docker
-exec`. Workbench supplies the container and the backend's CLI, so the probe is
-portable across backends:
+exec`. Workbench supplies the container and the backend's CLI, so readiness
+probes and setup hooks are portable across backends:
 
 ```yaml
 readiness:
