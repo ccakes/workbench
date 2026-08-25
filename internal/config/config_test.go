@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,14 @@ services:
 		t.Errorf("watch_debounce = %v, want 300ms", cfg.Global.WatchDebounce.Duration)
 	}
 
+	// Container backend defaults
+	if cfg.Global.ContainerBackend != BackendDocker {
+		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendDocker)
+	}
+	if cfg.Global.Apple.GatewayIP != "192.168.64.1" {
+		t.Errorf("apple.gateway_ip = %q, want 192.168.64.1", cfg.Global.Apple.GatewayIP)
+	}
+
 	// Service defaults
 	svc := cfg.Services["web"]
 	if svc.Restart.Policy != "never" {
@@ -76,6 +85,60 @@ services:
 	if svc.Restart.Backoff.Duration != 1*time.Second {
 		t.Errorf("restart.backoff = %v, want 1s", svc.Restart.Backoff.Duration)
 	}
+}
+
+func TestParse_ContainerBackendOverride(t *testing.T) {
+	yaml := []byte(`
+version: 1
+global:
+  container_backend: apple
+  apple:
+    gateway_ip: 10.0.0.1
+services:
+  db:
+    container:
+      image: postgres:16
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Global.ContainerBackend != BackendApple {
+		t.Errorf("container_backend = %q, want %q", cfg.Global.ContainerBackend, BackendApple)
+	}
+	if cfg.Global.Apple.GatewayIP != "10.0.0.1" {
+		t.Errorf("apple.gateway_ip = %q, want 10.0.0.1", cfg.Global.Apple.GatewayIP)
+	}
+}
+
+func TestValidate_InvalidContainerBackend(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Global:  GlobalConfig{ContainerBackend: "podman"},
+		Services: map[string]ServiceConfig{
+			"db": {Container: &ContainerConfig{Image: "postgres:16"}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid container_backend")
+	}
+	assertContains(t, err.Error(), "invalid container_backend")
+}
+
+func TestValidate_InvalidAppleGatewayIP(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Global:  GlobalConfig{Apple: AppleConfig{GatewayIP: "not-an-ip"}},
+		Services: map[string]ServiceConfig{
+			"db": {Container: &ContainerConfig{Image: "postgres:16"}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid apple.gateway_ip")
+	}
+	assertContains(t, err.Error(), "apple.gateway_ip")
 }
 
 func TestParse_CommandAsString(t *testing.T) {
@@ -168,6 +231,71 @@ services:
 	}
 	if cfg.Services["app"].Restart.Backoff.Duration != 2*time.Second {
 		t.Errorf("backoff = %v, want 2s", cfg.Services["app"].Restart.Backoff.Duration)
+	}
+}
+
+func TestParse_SetupKinds(t *testing.T) {
+	yaml := []byte(`
+version: 1
+services:
+  app:
+    dir: /tmp
+    command: echo app
+    setup:
+      kind: exec
+      command: echo setup
+      timeout: 3s
+  db:
+    container:
+      image: postgres:16
+    setup:
+      kind: container_exec
+      command: [psql, -c, "select 1"]
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	app := cfg.Services["app"].Setup
+	if app == nil || app.Kind != ExecKind || app.Command.String() != "echo setup" {
+		t.Fatalf("unexpected exec setup: %#v", app)
+	}
+	if app.Timeout.Duration != 3*time.Second {
+		t.Fatalf("timeout = %v, want 3s", app.Timeout.Duration)
+	}
+
+	db := cfg.Services["db"].Setup
+	if db == nil || db.Kind != ContainerExecKind {
+		t.Fatalf("unexpected container setup: %#v", db)
+	}
+	want := []string{"psql", "-c", "select 1"}
+	if !reflect.DeepEqual(db.Command.Parts, want) {
+		t.Fatalf("command = %v, want %v", db.Command.Parts, want)
+	}
+}
+
+func TestParse_LegacySetupCommand(t *testing.T) {
+	yaml := []byte(`
+version: 1
+services:
+  app:
+    dir: /tmp
+    command: echo app
+    setup:
+      command: echo setup
+`)
+	cfg, err := Parse(yaml, "/tmp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if got := cfg.Services["app"].Setup.Kind; got != ExecKind {
+		t.Fatalf("setup kind = %q, want %q", got, ExecKind)
+	}
+	warnings := cfg.Warnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "setup.command without setup.kind") {
+		t.Fatalf("warnings = %v", warnings)
 	}
 }
 
@@ -806,25 +934,25 @@ func TestValidate_ReadinessKinds(t *testing.T) {
 	dir := t.TempDir()
 	tests := []struct {
 		name      string
-		readiness ReadinessConfig
+		readiness ServiceHookConfig
 		wantErr   string
 	}{
-		{name: "none", readiness: ReadinessConfig{Kind: "none"}, wantErr: ""},
-		{name: "empty", readiness: ReadinessConfig{Kind: ""}, wantErr: ""},
-		{name: "log_pattern valid", readiness: ReadinessConfig{Kind: "log_pattern", Pattern: "ready"}, wantErr: ""},
-		{name: "log_pattern missing pattern", readiness: ReadinessConfig{Kind: "log_pattern"}, wantErr: "requires a pattern"},
-		{name: "tcp valid", readiness: ReadinessConfig{Kind: "tcp", Address: ":8080"}, wantErr: ""},
-		{name: "tcp missing address", readiness: ReadinessConfig{Kind: "tcp"}, wantErr: "requires an address"},
-		{name: "http valid", readiness: ReadinessConfig{Kind: "http", URL: "http://localhost"}, wantErr: ""},
-		{name: "http missing url", readiness: ReadinessConfig{Kind: "http"}, wantErr: "requires a url"},
-		{name: "invalid kind", readiness: ReadinessConfig{Kind: "bogus"}, wantErr: "invalid readiness kind"},
-		{name: "exec valid", readiness: ReadinessConfig{Kind: "exec", Command: &Command{Parts: []string{"echo", "ok"}}}, wantErr: ""},
-		{name: "exec missing command", readiness: ReadinessConfig{Kind: "exec"}, wantErr: "requires a command"},
-		{name: "grpc valid", readiness: ReadinessConfig{Kind: "grpc", Address: "localhost:50051"}, wantErr: ""},
-		{name: "grpc missing address", readiness: ReadinessConfig{Kind: "grpc"}, wantErr: "requires an address"},
-		{name: "negative max_attempts", readiness: ReadinessConfig{Kind: "none", MaxAttempts: -1}, wantErr: "max_attempts must be >= 0"},
-		{name: "negative interval", readiness: ReadinessConfig{Kind: "none", Interval: Duration{Duration: -time.Second}}, wantErr: "interval must be >= 0"},
-		{name: "negative settle", readiness: ReadinessConfig{Kind: "none", Settle: Duration{Duration: -time.Second}}, wantErr: "settle must be >= 0"},
+		{name: "none", readiness: ServiceHookConfig{Kind: "none"}, wantErr: ""},
+		{name: "empty", readiness: ServiceHookConfig{Kind: ""}, wantErr: ""},
+		{name: "log_pattern valid", readiness: ServiceHookConfig{Kind: "log_pattern", Pattern: "ready"}, wantErr: ""},
+		{name: "log_pattern missing pattern", readiness: ServiceHookConfig{Kind: "log_pattern"}, wantErr: "requires a pattern"},
+		{name: "tcp valid", readiness: ServiceHookConfig{Kind: "tcp", Address: ":8080"}, wantErr: ""},
+		{name: "tcp missing address", readiness: ServiceHookConfig{Kind: "tcp"}, wantErr: "requires an address"},
+		{name: "http valid", readiness: ServiceHookConfig{Kind: "http", URL: "http://localhost"}, wantErr: ""},
+		{name: "http missing url", readiness: ServiceHookConfig{Kind: "http"}, wantErr: "requires a url"},
+		{name: "invalid kind", readiness: ServiceHookConfig{Kind: "bogus"}, wantErr: "invalid readiness kind"},
+		{name: "exec valid", readiness: ServiceHookConfig{Kind: "exec", Command: &Command{Parts: []string{"echo", "ok"}}}, wantErr: ""},
+		{name: "exec missing command", readiness: ServiceHookConfig{Kind: "exec"}, wantErr: "requires a command"},
+		{name: "grpc valid", readiness: ServiceHookConfig{Kind: "grpc", Address: "localhost:50051"}, wantErr: ""},
+		{name: "grpc missing address", readiness: ServiceHookConfig{Kind: "grpc"}, wantErr: "requires an address"},
+		{name: "negative max_attempts", readiness: ServiceHookConfig{Kind: "none", MaxAttempts: -1}, wantErr: "max_attempts must be >= 0"},
+		{name: "negative interval", readiness: ServiceHookConfig{Kind: "none", Interval: Duration{Duration: -time.Second}}, wantErr: "interval must be >= 0"},
+		{name: "negative settle", readiness: ServiceHookConfig{Kind: "none", Settle: Duration{Duration: -time.Second}}, wantErr: "settle must be >= 0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2535,5 +2663,126 @@ func TestTransitiveDeps(t *testing.T) {
 	// Unknown root surfaces an error rather than silently being included.
 	if _, err := cfg.TransitiveDeps([]string{"nope"}); err == nil {
 		t.Error("expected error for unknown root")
+	}
+}
+
+func TestValidate_ContainerExecReadiness(t *testing.T) {
+	containerSvc := func(r ServiceHookConfig) ServiceConfig {
+		return ServiceConfig{
+			Container: &ContainerConfig{Image: "postgres:16"},
+			Restart:   RestartConfig{Policy: "never"},
+			Readiness: r,
+		}
+	}
+
+	t.Run("valid on a container service", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"db": containerSvc(ServiceHookConfig{
+				Kind:    "container_exec",
+				Command: &Command{Parts: []string{"pg_isready", "-U", "bench"}},
+			}),
+		}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected container_exec to validate, got %v", err)
+		}
+	})
+
+	t.Run("requires a command", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"db": containerSvc(ServiceHookConfig{Kind: "container_exec"}),
+		}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error for missing command")
+		}
+		assertContains(t, err.Error(), "container_exec requires a command")
+	})
+
+	t.Run("rejects a process service", func(t *testing.T) {
+		cfg := &Config{Version: 1, Services: map[string]ServiceConfig{
+			"app": {
+				Dir:     ".",
+				Command: &Command{Parts: []string{"echo"}},
+				Restart: RestartConfig{Policy: "never"},
+				Readiness: ServiceHookConfig{
+					Kind:    "container_exec",
+					Command: &Command{Parts: []string{"pg_isready"}},
+				},
+			},
+		}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected validation error for a non-container service")
+		}
+		assertContains(t, err.Error(), "container_exec requires a container service")
+	})
+}
+
+func TestValidate_SetupKinds(t *testing.T) {
+	command := &Command{Parts: []string{"echo", "setup"}}
+	processSvc := func(setup *ServiceHookConfig) ServiceConfig {
+		return ServiceConfig{
+			Dir:     ".",
+			Command: &Command{Parts: []string{"echo"}},
+			Restart: RestartConfig{Policy: "never"},
+			Setup:   setup,
+		}
+	}
+	containerSvc := func(setup *ServiceHookConfig) ServiceConfig {
+		return ServiceConfig{
+			Container: &ContainerConfig{Image: "postgres:16"},
+			Restart:   RestartConfig{Policy: "never"},
+			Setup:     setup,
+		}
+	}
+	setup := func(kind string) *ServiceHookConfig {
+		return &ServiceHookConfig{Kind: kind, Command: command}
+	}
+
+	tests := []struct {
+		name    string
+		service ServiceConfig
+		wantErr string
+	}{
+		{name: "host exec", service: processSvc(setup(ExecKind))},
+		{name: "container exec", service: containerSvc(setup(ContainerExecKind))},
+		{name: "container exec on process", service: processSvc(setup(ContainerExecKind)), wantErr: "requires a container service"},
+		{name: "invalid kind", service: processSvc(setup("http")), wantErr: "invalid setup kind"},
+		{name: "missing command", service: processSvc(&ServiceHookConfig{Kind: ExecKind}), wantErr: "requires a command"},
+		{
+			name: "probe option",
+			service: processSvc(&ServiceHookConfig{
+				Kind:     ExecKind,
+				Command:  command,
+				Interval: Duration{Duration: time.Second},
+			}),
+			wantErr: "setup only supports kind, command, timeout, and env",
+		},
+		{
+			name: "container env",
+			service: containerSvc(&ServiceHookConfig{
+				Kind:    ContainerExecKind,
+				Command: command,
+				Env:     map[string]string{"ROLE": "admin"},
+			}),
+			wantErr: "env is only supported for kind exec",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Version: 1, Services: map[string]ServiceConfig{"app": tt.service}}
+			err := cfg.Validate()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if tt.wantErr == "" {
+				return
+			}
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			assertContains(t, err.Error(), tt.wantErr)
+		})
 	}
 }

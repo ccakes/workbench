@@ -12,11 +12,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Container backend identifiers for GlobalConfig.ContainerBackend.
+const (
+	BackendDocker = "docker"
+	BackendApple  = "apple"
+	BackendAuto   = "auto"
+)
+
 type Config struct {
 	Version  int                      `yaml:"version"`
 	Extends  string                   `yaml:"extends"`
 	Global   GlobalConfig             `yaml:"global"`
 	Services map[string]ServiceConfig `yaml:"services"`
+	warnings []string
 }
 
 type GlobalConfig struct {
@@ -26,7 +34,20 @@ type GlobalConfig struct {
 	Env             map[string]string `yaml:"env"`
 	EnvFile         string            `yaml:"env_file"`
 	ContainerPrefix string            `yaml:"container_prefix"`
-	Tracing         TracingConfig     `yaml:"tracing"`
+	// ContainerBackend selects the runtime for container services:
+	// "docker" (default), "apple", or "auto". "auto" prefers Apple's
+	// `container` on Apple silicon when installed.
+	ContainerBackend string        `yaml:"container_backend"`
+	Apple            AppleConfig   `yaml:"apple"`
+	Tracing          TracingConfig `yaml:"tracing"`
+}
+
+// AppleConfig holds settings specific to the Apple `container` backend.
+type AppleConfig struct {
+	// GatewayIP is the vmnet gateway address a container uses to reach services
+	// on the macOS host (e.g. the OTLP trace collector). Defaults to
+	// 192.168.64.1, the `container` default subnet gateway.
+	GatewayIP string `yaml:"gateway_ip"`
 }
 
 // Duration wraps time.Duration for YAML unmarshaling from strings like "10s".
@@ -94,23 +115,23 @@ type ContainerConfig struct {
 }
 
 type ServiceConfig struct {
-	Name            string            `yaml:"name"`
-	Dir             string            `yaml:"dir"`
-	Command         *Command          `yaml:"command"`
-	Container       *ContainerConfig  `yaml:"container"`
-	Env             map[string]string `yaml:"env"`
-	EnvFile         string            `yaml:"env_file"`
-	AutoStart       *bool             `yaml:"auto_start"`
-	DependsOn       []string          `yaml:"depends_on"`
-	Restart         RestartConfig     `yaml:"restart"`
-	Watch           WatchConfig       `yaml:"watch"`
-	Readiness       ReadinessConfig   `yaml:"readiness"`
-	Setup           *SetupConfig      `yaml:"setup"`
-	Profiles        []string          `yaml:"profiles"`
-	Group           string            `yaml:"group"`
-	Labels          map[string]string `yaml:"labels"`
-	StopSignal      string            `yaml:"stop_signal"`
-	ShutdownTimeout *Duration         `yaml:"shutdown_timeout"`
+	Name            string             `yaml:"name"`
+	Dir             string             `yaml:"dir"`
+	Command         *Command           `yaml:"command"`
+	Container       *ContainerConfig   `yaml:"container"`
+	Env             map[string]string  `yaml:"env"`
+	EnvFile         string             `yaml:"env_file"`
+	AutoStart       *bool              `yaml:"auto_start"`
+	DependsOn       []string           `yaml:"depends_on"`
+	Restart         RestartConfig      `yaml:"restart"`
+	Watch           WatchConfig        `yaml:"watch"`
+	Readiness       ServiceHookConfig  `yaml:"readiness"`
+	Setup           *ServiceHookConfig `yaml:"setup"`
+	Profiles        []string           `yaml:"profiles"`
+	Group           string             `yaml:"group"`
+	Labels          map[string]string  `yaml:"labels"`
+	StopSignal      string             `yaml:"stop_signal"`
+	ShutdownTimeout *Duration          `yaml:"shutdown_timeout"`
 }
 
 // HasProfile returns true if this service is tagged with the given profile.
@@ -121,17 +142,6 @@ func (s *ServiceConfig) HasProfile(name string) bool {
 		}
 	}
 	return false
-}
-
-// SetupConfig configures a post-ready hook that runs after the service's
-// readiness probe passes and before dependents are unblocked. Useful for
-// per-service bootstrap steps (creating dev users, seeding flag environments,
-// running migrations) that today require wrapping the service's command in a
-// shell pipeline.
-type SetupConfig struct {
-	Command Command           `yaml:"command"`
-	Timeout Duration          `yaml:"timeout"`
-	Env     map[string]string `yaml:"env"`
 }
 
 // IsContainer returns true if this service is a container service.
@@ -196,18 +206,27 @@ func (w *WatchConfig) ShouldRestart() bool {
 	return *w.Restart
 }
 
-type ReadinessConfig struct {
-	Kind         string   `yaml:"kind"`
-	Pattern      string   `yaml:"pattern"`
-	Address      string   `yaml:"address"`
-	URL          string   `yaml:"url"`
-	Command      *Command `yaml:"command"`
-	Service      string   `yaml:"service"` // gRPC service name; empty = overall server health
-	Timeout      Duration `yaml:"timeout"`
-	InitialDelay Duration `yaml:"initial_delay"`
-	Interval     Duration `yaml:"interval"`
-	Settle       Duration `yaml:"settle"`
-	MaxAttempts  int      `yaml:"max_attempts"`
+const (
+	// ExecKind runs a command on the host.
+	ExecKind = "exec"
+	// ContainerExecKind runs a command inside the service container.
+	ContainerExecKind = "container_exec"
+)
+
+// ServiceHookConfig configures readiness and setup hooks.
+type ServiceHookConfig struct {
+	Kind         string            `yaml:"kind"`
+	Pattern      string            `yaml:"pattern"`
+	Address      string            `yaml:"address"`
+	URL          string            `yaml:"url"`
+	Command      *Command          `yaml:"command"`
+	Service      string            `yaml:"service"` // gRPC service name; empty = overall server health
+	Timeout      Duration          `yaml:"timeout"`
+	InitialDelay Duration          `yaml:"initial_delay"`
+	Interval     Duration          `yaml:"interval"`
+	Settle       Duration          `yaml:"settle"`
+	MaxAttempts  int               `yaml:"max_attempts"`
+	Env          map[string]string `yaml:"env"` // setup exec only
 }
 
 type TracingConfig struct {
@@ -631,6 +650,12 @@ func mergeGlobal(p, c GlobalConfig) GlobalConfig {
 	if c.ContainerPrefix != "" {
 		out.ContainerPrefix = c.ContainerPrefix
 	}
+	if c.ContainerBackend != "" {
+		out.ContainerBackend = c.ContainerBackend
+	}
+	if c.Apple.GatewayIP != "" {
+		out.Apple.GatewayIP = c.Apple.GatewayIP
+	}
 	out.Tracing = mergeTracing(p.Tracing, c.Tracing)
 	if len(c.Env) > 0 {
 		merged := make(map[string]string, len(p.Env)+len(c.Env))
@@ -677,6 +702,12 @@ func (c *Config) applyDefaults() {
 	if c.Global.Tracing.BufferSize == 0 {
 		c.Global.Tracing.BufferSize = ByteSize(500 * 1024 * 1024)
 	}
+	if c.Global.ContainerBackend == "" {
+		c.Global.ContainerBackend = BackendDocker
+	}
+	if c.Global.Apple.GatewayIP == "" {
+		c.Global.Apple.GatewayIP = "192.168.64.1"
+	}
 	for key, svc := range c.Services {
 		if svc.Restart.Policy == "" {
 			svc.Restart.Policy = "never"
@@ -687,8 +718,24 @@ func (c *Config) applyDefaults() {
 		if len(svc.Watch.Paths) == 0 && svc.Watch.IsEnabled() {
 			svc.Watch.Paths = []string{"."}
 		}
+		if svc.Setup != nil && svc.Setup.Kind == "" && svc.Setup.Command != nil {
+			svc.Setup.Kind = ExecKind
+			c.warnings = append(c.warnings, fmt.Sprintf(
+				"service %q: setup.command without setup.kind is deprecated; using %s",
+				key,
+				ExecKind,
+			))
+		}
 		c.Services[key] = svc
 	}
+}
+
+// Warnings returns non-fatal config diagnostics.
+func (c *Config) Warnings() []string {
+	warnings := append([]string(nil), c.warnings...)
+	sort.Strings(warnings)
+
+	return warnings
 }
 
 // FindConfig searches for bench.yml in the current and parent directories.

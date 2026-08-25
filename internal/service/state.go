@@ -75,6 +75,7 @@ type Info struct {
 	LastError    string
 	WatchEnabled bool
 	ServiceType  string // "process" or "container"
+	Backend      string // container backend name ("docker"/"apple"); empty for processes
 	ContainerID  string
 	Image        string
 	Ports        []string
@@ -131,6 +132,7 @@ type Snapshot struct {
 	LastError    string
 	WatchEnabled bool
 	ServiceType  string
+	Backend      string
 	ContainerID  string
 	Image        string
 	Ports        []string
@@ -152,6 +154,7 @@ func (i *Info) Snapshot() Snapshot {
 		LastError:    i.LastError,
 		WatchEnabled: i.WatchEnabled,
 		ServiceType:  i.ServiceType,
+		Backend:      i.Backend,
 		ContainerID:  i.ContainerID,
 		Image:        i.Image,
 		Ports:        i.Ports,

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,6 +26,7 @@ type Supervisor struct {
 	bus      *events.Bus
 	ctx      context.Context
 	cancel   context.CancelFunc
+	backend  runner.ContainerBackend
 }
 
 type managedService struct {
@@ -59,11 +61,12 @@ func New(cfg *config.Config, bus *events.Bus) *Supervisor {
 		bus:      bus,
 		ctx:      ctx,
 		cancel:   cancel,
+		backend:  runner.ResolveBackend(cfg.Global),
 	}
 
 	for key, svcCfg := range cfg.Services {
 		info := service.NewInfo(key, displayName(key, svcCfg))
-		applyServiceMetadata(info, key, svcCfg, false)
+		applyServiceMetadata(info, key, svcCfg, false, s.backend.Name())
 
 		s.services[key] = &managedService{
 			info:      info,
@@ -85,7 +88,7 @@ func displayName(key string, svcCfg config.ServiceConfig) string {
 	return key
 }
 
-func applyServiceMetadata(info *service.Info, key string, svcCfg config.ServiceConfig, preserveStatus bool) {
+func applyServiceMetadata(info *service.Info, key string, svcCfg config.ServiceConfig, preserveStatus bool, backendName string) {
 	info.Lock()
 	defer info.Unlock()
 
@@ -93,10 +96,12 @@ func applyServiceMetadata(info *service.Info, key string, svcCfg config.ServiceC
 	info.WatchEnabled = svcCfg.Watch.IsEnabled()
 	if svcCfg.IsContainer() {
 		info.ServiceType = "container"
+		info.Backend = backendName
 		info.Image = svcCfg.Container.Image
 		info.Ports = append([]string(nil), svcCfg.Container.Ports...)
 	} else {
 		info.ServiceType = "process"
+		info.Backend = ""
 		info.Image = ""
 		info.Ports = nil
 	}
@@ -325,7 +330,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 
 		// Create a fresh runner for each attempt
 		if ms.cfg.IsContainer() {
-			ms.r = runner.NewContainerRunner(ms.cfg, ms.key, s.cfg.Global.ContainerPrefix)
+			ms.r = runner.NewContainerRunner(ms.cfg, ms.key, s.cfg.Global.ContainerPrefix, s.backend)
 		} else {
 			ms.r = runner.NewProcessRunner(ms.cfg)
 		}
@@ -342,6 +347,13 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			ms.info.LastError = err.Error()
 			ms.info.Unlock()
 			s.setStatus(ms, service.StatusFailed, err.Error())
+
+			// A platform mismatch (e.g. an image with no arm64 variant) can
+			// never succeed on retry — fail terminally instead of looping
+			// through the restart policy.
+			if errors.Is(err, runner.ErrUnsupportedPlatform) {
+				return
+			}
 
 			// On start failure, check restart policy
 			if !s.shouldRestart(ms, 1) {
@@ -386,8 +398,13 @@ func (s *Supervisor) runLoop(ms *managedService) {
 		if last := ms.logs.Last(1); len(last) == 1 {
 			baseline = last[0].Seq
 		}
+		// Resolved before the goroutine starts so startup hooks never race the
+		// runLoop for ms.r. Process runners don't implement ContainerExecer,
+		// which leaves execer nil and makes container_exec fail with a clear
+		// message rather than silently probing nothing.
+		execer, _ := ms.r.(runner.ContainerExecer)
 		probeWG.Go(func() {
-			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline) {
+			if !runProbe(probeCtx, ms.cfg.Readiness, ms.logs, baseline, execer) {
 				if probeCtx.Err() == nil {
 					ms.mu.Lock()
 					ms.startupErr = readinessFailureReason(ms.cfg.Readiness)
@@ -401,7 +418,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 			}
 			if ms.cfg.Setup != nil {
 				s.setStatus(ms, service.StatusSetup, "running setup hook")
-				if err := s.runSetupHook(probeCtx, ms); err != nil {
+				if err := s.runSetupHook(probeCtx, ms, execer); err != nil {
 					// Record the failure on the managed service. The runLoop's
 					// stop path sees startupErr and finalises as Failed (not
 					// Stopped) so the user can tell apart "I stopped this"
@@ -513,7 +530,7 @@ func (s *Supervisor) runLoop(ms *managedService) {
 	}
 }
 
-func readinessFailureReason(cfg config.ReadinessConfig) string {
+func readinessFailureReason(cfg config.ServiceHookConfig) string {
 	if cfg.MaxAttempts > 0 {
 		return fmt.Sprintf("readiness probe failed after %d attempts", cfg.MaxAttempts)
 	}
@@ -681,11 +698,11 @@ func (s *Supervisor) buildEnv(ms *managedService) ([]string, error) {
 		}
 		// The collector listens on the host. Host-process services reach it
 		// via localhost, but container services have their own loopback, so
-		// they must reach the host collector via host.docker.internal (added
-		// to container runs as a host-gateway alias by the container runner).
+		// they reach the host collector via the backend's host address
+		// (host.docker.internal for Docker, the vmnet gateway IP for Apple).
 		otelHost := "localhost"
 		if ms.cfg.IsContainer() {
-			otelHost = "host.docker.internal"
+			otelHost = s.backend.OTELHost()
 		}
 		if !alreadySet("OTEL_EXPORTER_OTLP_ENDPOINT") {
 			env = append(env, fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d", otelHost, port))

@@ -3,11 +3,13 @@ package supervisor
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"time"
+
+	"github.com/ccakes/workbench/internal/config"
+	"github.com/ccakes/workbench/internal/runner"
 )
 
 const setupDefaultTimeout = 60 * time.Second
@@ -15,16 +17,20 @@ const setupDefaultTimeout = 60 * time.Second
 // runSetupHook executes the configured setup command for a service after its
 // readiness probe has passed. The hook's stdout/stderr are appended to the
 // service's log buffer with a `setup` stream tag so the user can see what
-// happened. Setup-hook env layers on top of the service's resolved env:
+// happened. Host-exec env layers on top of the service's resolved env:
 // process env -> global env_file -> global env -> service env_file -> service
-// env -> setup env. The hook runs in the service's working directory.
+// env -> setup env. Container exec inherits the running container's env.
 //
 // Returns nil on exit 0. Returns a non-nil error on non-zero exit, timeout,
 // context cancellation, or if the env or working dir can't be resolved.
-func (s *Supervisor) runSetupHook(ctx context.Context, ms *managedService) error {
+func (s *Supervisor) runSetupHook(ctx context.Context, ms *managedService, execer runner.ContainerExecer) error {
 	cfg := ms.cfg.Setup
-	if cfg == nil || len(cfg.Command.Parts) == 0 {
-		return errors.New("missing command")
+	if cfg == nil {
+		return fmt.Errorf("missing config")
+	}
+	bin, args, err := resolveExec(*cfg, execer)
+	if err != nil {
+		return err
 	}
 
 	timeout := cfg.Timeout.Duration
@@ -34,18 +40,18 @@ func (s *Supervisor) runSetupHook(ctx context.Context, ms *managedService) error
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	env, err := s.buildEnv(ms)
-	if err != nil {
-		return fmt.Errorf("building env: %w", err)
-	}
-	for k, v := range cfg.Env {
-		env = append(env, k+"="+v)
-	}
-
-	parts := cfg.Command.Parts
-	cmd := exec.CommandContext(cmdCtx, parts[0], parts[1:]...)
+	cmd := exec.CommandContext(cmdCtx, bin, args...)
 	cmd.Dir = ms.cfg.Dir
-	cmd.Env = env
+	if cfg.Kind == config.ExecKind {
+		env, err := s.buildEnv(ms)
+		if err != nil {
+			return fmt.Errorf("building env: %w", err)
+		}
+		for k, v := range cfg.Env {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+	}
 
 	outR, outW := io.Pipe()
 	errR, errW := io.Pipe()

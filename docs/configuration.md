@@ -65,7 +65,7 @@ Unknown YAML fields are rejected at parse time. A typo such as `expect_status: 2
 
 ```
 error: parsing config bench.yml: parsing config: yaml: unmarshal errors:
-  line 9: field expect_status not found in type config.ReadinessConfig
+  line 9: field expect_status not found in type config.ServiceHookConfig
 ```
 
 Run `bench validate` to surface these errors without starting any services.
@@ -90,8 +90,24 @@ Run `bench validate` to surface these errors without starting any services.
 | `watch_debounce`   | duration | `300ms` | Default debounce for file watchers                            |
 | `env`              | map      |         | Global environment variables applied to all services          |
 | `env_file`         | path     |         | Global .env file loaded for all services                      |
-| `container_prefix` | string   | dirname | Prefix for Docker container names (e.g. `{prefix}-{service}`) |
+| `container_prefix` | string   | dirname | Prefix for container names (e.g. `{prefix}-{service}`)        |
+| `container_backend`| string   | `docker`| Container runtime: `docker`, `apple`, or `auto`               |
+| `apple`            | object   |         | Apple `container` backend settings                            |
 | `tracing`          | object   |         | Tracing configuration                                         |
+
+#### Container backend
+
+Container services run on Docker by default. On Apple silicon you can run them
+on [Apple's `container`](apple-container.md) tool instead.
+
+| Field               | Type   | Default | Description                                              |
+| ------------------- | ------ | ------- | -------------------------------------------------------- |
+| `container_backend` | string | `docker`| `docker`, `apple`, or `auto` (prefer Apple when present) |
+| `apple.gateway_ip`  | string | `192.168.64.1` | Host IP an Apple container uses to reach the host |
+
+`auto` is opt-in. It selects the Apple backend when running on Apple silicon
+with the `container` binary installed, otherwise Docker. See
+[apple-container.md](apple-container.md) for requirements and caveats.
 
 #### Tracing
 
@@ -216,15 +232,15 @@ Common noisy directories (`.git`, `node_modules`, `__pycache__`) are always excl
 
 | Field           | Type           | Description                                                                       |
 | --------------- | -------------- | --------------------------------------------------------------------------------- |
-| `kind`          | string         | `none`, `log_pattern`, `tcp`, `http`, `exec`, or `grpc`                           |
+| `kind`          | string         | `none`, `log_pattern`, `tcp`, `http`, `exec`, `container_exec`, or `grpc`         |
 | `pattern`       | string         | Go regular expression matched against log lines (for `log_pattern`)               |
 | `address`       | string         | TCP address to dial, `host:port` (for `tcp` and `grpc`)                           |
 | `url`           | string         | HTTP URL to GET; any 2xx response means ready (for `http`)                        |
-| `command`       | string or list | Shell command or argv to run (for `exec`); exit 0 = ready                         |
+| `command`       | string or list | Shell command or argv to run (for `exec` and `container_exec`); exit 0 = ready    |
 | `service`       | string         | gRPC service name (for `grpc`); empty = overall server health                     |
 | `timeout`       | duration       | Per-attempt probe timeout (default `2s`)                                          |
 | `initial_delay` | duration       | Delay before the first probe attempt                                              |
-| `interval`      | duration       | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec` |
+| `interval`      | duration       | Sleep between failed attempts (default `500ms`); applies to `tcp`, `http`, `exec`, `container_exec` |
 | `max_attempts`  | integer        | Cap on probe attempts before giving up (default `0` = unlimited)                  |
 | `settle`        | duration       | Delay between probe-success and the Ready transition                              |
 
@@ -245,9 +261,29 @@ dependents parked in Pending.
   successful connect wins.
 - **`http`** issues `GET url` using an `http.Client` with `timeout`. Any 2xx
   response marks the service Ready.
-- **`exec`** runs `command` with a `timeout` deadline per attempt. Exit 0 = ready.
-  stdout/stderr from the probe is appended to the service's log buffer tagged
-  with stream `probe`, so you can see what the probe is observing.
+- **`exec`** runs `command` on the **host** with a `timeout` deadline per attempt.
+  Exit 0 = ready. stdout/stderr from the probe is appended to the service's log
+  buffer tagged with stream `probe`, so you can see what the probe is observing.
+- **`container_exec`** runs `command` **inside the service's own container**,
+  otherwise behaving exactly like `exec`. Only valid on a service with a
+  `container:` block; `bench validate` rejects it elsewhere. Workbench supplies
+  both the container and the runtime CLI, so the probe works unchanged on either
+  [container backend](apple-container.md) and does not depend on
+  `container_prefix` or the service key:
+
+  ```yaml
+  services:
+    postgres:
+      container:
+        image: postgres:16-alpine
+      readiness:
+        kind: container_exec
+        command: pg_isready -U bench -d bench
+  ```
+
+  Prefer this over `exec` with a hand-written `docker exec <name> …`, which
+  hardcodes both the runtime and the container name and so breaks when the
+  backend resolves to Apple `container` or the prefix changes.
 - **`grpc`** issues a `grpc.health.v1.Health/Check` call against `address`. Ready
   when the server responds with status `SERVING`. Set `service` to probe a
   specific gRPC service registered for health reporting; leave it empty to
@@ -304,11 +340,12 @@ passes (and after any `settle` delay), before the service transitions to
 bootstrap that's logically part of bringing this service up — creating a dev
 environment in a flag service, seeding a default DB user, applying migrations.
 
-| Field     | Type           | Description                                            |
-| --------- | -------------- | ------------------------------------------------------ |
-| `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded |
-| `timeout` | duration       | Cap on setup runtime (default `60s`)                   |
-| `env`     | map            | Extra env applied on top of the service's env          |
+| Field     | Type           | Description                                                   |
+| --------- | -------------- | ------------------------------------------------------------- |
+| `kind`    | string         | `exec` (host) or `container_exec` (the service's container)   |
+| `command` | string or list | Shell command or argv to run; exit 0 = setup succeeded        |
+| `timeout` | duration       | Cap on setup runtime (default `60s`)                          |
+| `env`     | map            | Extra environment for `exec`; unsupported by `container_exec` |
 
 ```yaml
 services:
@@ -318,9 +355,14 @@ services:
       kind: http
       url: http://localhost:4242/health
     setup:
+      kind: exec
       command: ./bin/flagman create-env development
       timeout: 30s
 ```
+
+`container_exec` is only valid for container services and uses the configured
+container backend. A legacy setup block containing `command` without `kind`
+still runs as `exec`, with a deprecation warning.
 
 The status flow is `Running → Setup → Ready`. On non-zero exit or timeout the
 supervisor stops the service and marks it **Failed** with the setup error in

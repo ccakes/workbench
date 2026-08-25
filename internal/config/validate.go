@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -92,7 +93,7 @@ func (c *Config) Validate() error {
 		}
 
 		switch svc.Readiness.Kind {
-		case "", "none", "log_pattern", "tcp", "http", "exec", "grpc":
+		case "", "none", "log_pattern", "tcp", "http", ExecKind, ContainerExecKind, "grpc":
 			// valid
 		default:
 			errs = append(errs, fmt.Sprintf("%s: invalid readiness kind %q", prefix, svc.Readiness.Kind))
@@ -107,8 +108,19 @@ func (c *Config) Validate() error {
 		if svc.Readiness.Kind == "http" && svc.Readiness.URL == "" {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind http requires a url", prefix))
 		}
-		if svc.Readiness.Kind == "exec" && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
+		if svc.Readiness.Kind == ExecKind && (svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0) {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind exec requires a command", prefix))
+		}
+		if svc.Readiness.Kind == ContainerExecKind {
+			if svc.Readiness.Command == nil || len(svc.Readiness.Command.Parts) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: readiness kind container_exec requires a command", prefix))
+			}
+			// The probe runs inside the service's own container, so there has to
+			// be one. Caught here rather than at runtime because it can only ever
+			// be a config mistake.
+			if !svc.IsContainer() {
+				errs = append(errs, fmt.Sprintf("%s: readiness kind container_exec requires a container service", prefix))
+			}
 		}
 		if svc.Readiness.Kind == "grpc" && svc.Readiness.Address == "" {
 			errs = append(errs, fmt.Sprintf("%s: readiness kind grpc requires an address", prefix))
@@ -122,13 +134,31 @@ func (c *Config) Validate() error {
 		if svc.Readiness.Settle.Duration < 0 {
 			errs = append(errs, fmt.Sprintf("%s: readiness settle must be >= 0", prefix))
 		}
+		if len(svc.Readiness.Env) > 0 {
+			errs = append(errs, fmt.Sprintf("%s: readiness env is not supported", prefix))
+		}
 
 		if svc.Setup != nil {
-			if len(svc.Setup.Command.Parts) == 0 {
-				errs = append(errs, fmt.Sprintf("%s: setup requires a command", prefix))
+			switch svc.Setup.Kind {
+			case ExecKind:
+			case ContainerExecKind:
+				if !svc.IsContainer() {
+					errs = append(errs, fmt.Sprintf("%s: setup kind container_exec requires a container service", prefix))
+				}
+				if len(svc.Setup.Env) > 0 {
+					errs = append(errs, fmt.Sprintf("%s: setup env is only supported for kind exec", prefix))
+				}
+			default:
+				errs = append(errs, fmt.Sprintf("%s: invalid setup kind %q (must be exec or container_exec)", prefix, svc.Setup.Kind))
+			}
+			if svc.Setup.Command == nil || len(svc.Setup.Command.Parts) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: setup kind %s requires a command", prefix, svc.Setup.Kind))
 			}
 			if svc.Setup.Timeout.Duration < 0 {
 				errs = append(errs, fmt.Sprintf("%s: setup timeout must be >= 0", prefix))
+			}
+			if hasProbeOnlyFields(svc.Setup) {
+				errs = append(errs, fmt.Sprintf("%s: setup only supports kind, command, timeout, and env", prefix))
 			}
 		}
 	}
@@ -139,6 +169,17 @@ func (c *Config) Validate() error {
 
 	if bad := invalidContainerPrefixChar.FindString(c.Global.ContainerPrefix); bad != "" {
 		errs = append(errs, fmt.Sprintf("container_prefix %q contains invalid character %q (only alphanumeric, hyphens, and underscores are allowed)", c.Global.ContainerPrefix, bad))
+	}
+
+	switch c.Global.ContainerBackend {
+	case "", BackendDocker, BackendApple, BackendAuto:
+		// valid (empty is defaulted to Docker)
+	default:
+		errs = append(errs, fmt.Sprintf("invalid container_backend %q (must be %q, %q, or %q)", c.Global.ContainerBackend, BackendDocker, BackendApple, BackendAuto))
+	}
+
+	if c.Global.Apple.GatewayIP != "" && net.ParseIP(c.Global.Apple.GatewayIP) == nil {
+		errs = append(errs, fmt.Sprintf("apple.gateway_ip %q is not a valid IP address", c.Global.Apple.GatewayIP))
 	}
 
 	if c.Global.EnvFile != "" {
@@ -160,6 +201,17 @@ func (c *Config) Validate() error {
 		return &ValidationError{Errors: errs}
 	}
 	return nil
+}
+
+func hasProbeOnlyFields(cfg *ServiceHookConfig) bool {
+	return cfg.Pattern != "" ||
+		cfg.Address != "" ||
+		cfg.URL != "" ||
+		cfg.Service != "" ||
+		cfg.InitialDelay.Duration != 0 ||
+		cfg.Interval.Duration != 0 ||
+		cfg.Settle.Duration != 0 ||
+		cfg.MaxAttempts != 0
 }
 
 func (c *Config) checkCycles() error {

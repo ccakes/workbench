@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,9 +17,9 @@ import (
 	"github.com/ccakes/workbench/internal/logbuf"
 )
 
-// helper: build a ReadinessConfig with a given kind and useful defaults for tests.
-func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.ReadinessConfig {
-	return config.ReadinessConfig{
+// helper: build a ServiceHookConfig with a given kind and useful defaults for tests.
+func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:         "tcp",
 		Address:      addr,
 		Timeout:      config.Duration{Duration: timeout},
@@ -26,16 +27,16 @@ func tcpReadiness(addr string, timeout, initialDelay time.Duration) config.Readi
 	}
 }
 
-func httpReadiness(url string, timeout time.Duration) config.ReadinessConfig {
-	return config.ReadinessConfig{
+func httpReadiness(url string, timeout time.Duration) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:    "http",
 		URL:     url,
 		Timeout: config.Duration{Duration: timeout},
 	}
 }
 
-func logPatternReadiness(pattern string) config.ReadinessConfig {
-	return config.ReadinessConfig{
+func logPatternReadiness(pattern string) config.ServiceHookConfig {
+	return config.ServiceHookConfig{
 		Kind:    "log_pattern",
 		Pattern: pattern,
 	}
@@ -68,7 +69,7 @@ func TestProbeTCP_Ready(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if !runProbe(ctx, tcpReadiness(listenerAddr(l), 200*time.Millisecond, 0), nil, 0) {
+	if !runProbe(ctx, tcpReadiness(listenerAddr(l), 200*time.Millisecond, 0), nil, 0, nil) {
 		t.Fatalf("expected TCP probe to succeed")
 	}
 }
@@ -100,7 +101,7 @@ func TestProbeTCP_RetriesThenReady(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if !runProbe(ctx, tcpReadiness(addr, 200*time.Millisecond, 0), nil, 0) {
+	if !runProbe(ctx, tcpReadiness(addr, 200*time.Millisecond, 0), nil, 0, nil) {
 		t.Fatalf("expected TCP probe to succeed after retry")
 	}
 	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
@@ -114,7 +115,7 @@ func TestProbeTCP_CancelledBeforeReady(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan bool, 1)
 	go func() {
-		done <- runProbe(ctx, tcpReadiness(addr, 100*time.Millisecond, 0), nil, 0)
+		done <- runProbe(ctx, tcpReadiness(addr, 100*time.Millisecond, 0), nil, 0, nil)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -139,7 +140,7 @@ func TestProbeHTTP_2xx(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if !runProbe(ctx, httpReadiness(srv.URL, 500*time.Millisecond), nil, 0) {
+	if !runProbe(ctx, httpReadiness(srv.URL, 500*time.Millisecond), nil, 0, nil) {
 		t.Fatalf("expected HTTP probe to succeed on 200")
 	}
 }
@@ -153,7 +154,7 @@ func TestProbeHTTP_5xxNeverReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	if runProbe(ctx, httpReadiness(srv.URL, 200*time.Millisecond), nil, 0) {
+	if runProbe(ctx, httpReadiness(srv.URL, 200*time.Millisecond), nil, 0, nil) {
 		t.Fatalf("expected HTTP probe to return false (never reaches 2xx)")
 	}
 }
@@ -165,7 +166,7 @@ func TestProbeHTTP_NonDialable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	if runProbe(ctx, httpReadiness(url, 100*time.Millisecond), nil, 0) {
+	if runProbe(ctx, httpReadiness(url, 100*time.Millisecond), nil, 0, nil) {
 		t.Fatalf("expected HTTP probe to return false against closed port")
 	}
 }
@@ -185,7 +186,7 @@ func TestProbeLogPattern_MatchAfterBaseline(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- runProbe(ctx, logPatternReadiness("listening on"), buf, baseline)
+		done <- runProbe(ctx, logPatternReadiness("listening on"), buf, baseline, nil)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -212,7 +213,7 @@ func TestProbeLogPattern_IgnoresPreBaseline(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- runProbe(ctx, logPatternReadiness("listening on"), buf, baseline)
+		done <- runProbe(ctx, logPatternReadiness("listening on"), buf, baseline, nil)
 	}()
 
 	select {
@@ -238,7 +239,7 @@ func TestProbeInitialDelay(t *testing.T) {
 	cfg := tcpReadiness(listenerAddr(l), 200*time.Millisecond, 200*time.Millisecond)
 
 	start := time.Now()
-	if !runProbe(ctx, cfg, nil, 0) {
+	if !runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatalf("expected probe to eventually succeed")
 	}
 	if elapsed := time.Since(start); elapsed < 180*time.Millisecond {
@@ -255,7 +256,7 @@ func TestProbeBadRegex(t *testing.T) {
 	goroutinesBefore := runtime.NumGoroutine()
 	cfg := logPatternReadiness("[invalid(regex") // unclosed character class
 
-	result := runProbe(ctx, cfg, buf, 0)
+	result := runProbe(ctx, cfg, buf, 0, nil)
 	if result {
 		t.Fatalf("expected probe to return false on bad regex")
 	}
@@ -286,37 +287,37 @@ func TestRunProbe_NoneKindIsInstantReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	if !runProbe(ctx, config.ReadinessConfig{Kind: ""}, nil, 0) {
+	if !runProbe(ctx, config.ServiceHookConfig{Kind: ""}, nil, 0, nil) {
 		t.Error("empty kind should be instant-ready")
 	}
-	if !runProbe(ctx, config.ReadinessConfig{Kind: "none"}, nil, 0) {
+	if !runProbe(ctx, config.ServiceHookConfig{Kind: "none"}, nil, 0, nil) {
 		t.Error("'none' kind should be instant-ready")
 	}
 }
 
 func TestProbeExec_ExitZeroReady(t *testing.T) {
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "exec",
 		Command: &config.Command{Parts: []string{"sh", "-c", "exit 0"}},
 		Timeout: config.Duration{Duration: 2 * time.Second},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !runProbe(ctx, cfg, nil, 0) {
+	if !runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected exec probe to succeed on exit 0")
 	}
 }
 
 func TestProbeExec_StreamsOutputToLogs(t *testing.T) {
 	buf := logbuf.New(50)
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "exec",
 		Command: &config.Command{Parts: []string{"sh", "-c", "echo hello-probe && exit 0"}},
 		Timeout: config.Duration{Duration: 2 * time.Second},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !runProbe(ctx, cfg, buf, 0) {
+	if !runProbe(ctx, cfg, buf, 0, nil) {
 		t.Fatal("expected exec probe to succeed")
 	}
 	// Give the streaming goroutine a moment to drain.
@@ -335,7 +336,7 @@ func TestProbeExec_StreamsOutputToLogs(t *testing.T) {
 
 func TestProbeExec_MaxAttemptsCap(t *testing.T) {
 	// A command that always fails should give up after MaxAttempts and return false.
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "exec",
 		Command:     &config.Command{Parts: []string{"sh", "-c", "exit 1"}},
 		Timeout:     config.Duration{Duration: 200 * time.Millisecond},
@@ -345,7 +346,7 @@ func TestProbeExec_MaxAttemptsCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	if runProbe(ctx, cfg, nil, 0) {
+	if runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected exec probe to fail when command always exits non-zero")
 	}
 	elapsed := time.Since(start)
@@ -357,7 +358,7 @@ func TestProbeExec_MaxAttemptsCap(t *testing.T) {
 func TestProbeTCP_MaxAttemptsCap(t *testing.T) {
 	// Closed port + MaxAttempts=2 should bail quickly instead of looping
 	// until ctx cancellation.
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "tcp",
 		Address:     freeAddr(t),
 		Timeout:     config.Duration{Duration: 50 * time.Millisecond},
@@ -366,7 +367,7 @@ func TestProbeTCP_MaxAttemptsCap(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if runProbe(ctx, cfg, nil, 0) {
+	if runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected tcp probe to give up after MaxAttempts")
 	}
 }
@@ -378,7 +379,7 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: listenerAddr(l),
 		Timeout: config.Duration{Duration: 200 * time.Millisecond},
@@ -388,7 +389,7 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if !runProbe(ctx, cfg, nil, 0) {
+	if !runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected probe to succeed")
 	}
 	elapsed := time.Since(start)
@@ -399,14 +400,14 @@ func TestProbeSettleDelaysReady(t *testing.T) {
 
 func TestProbeGRPC_Serving(t *testing.T) {
 	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_SERVING, "")
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "grpc",
 		Address: addr,
 		Timeout: config.Duration{Duration: 500 * time.Millisecond},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !runProbe(ctx, cfg, nil, 0) {
+	if !runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected grpc probe to succeed when status=SERVING")
 	}
 }
@@ -419,7 +420,7 @@ func TestProbeGRPC_NotServingThenSucceeds(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		grpcHealthFlip(addr, healthpb.HealthCheckResponse_SERVING)
 	}()
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:     "grpc",
 		Address:  addr,
 		Timeout:  config.Duration{Duration: 200 * time.Millisecond},
@@ -427,14 +428,14 @@ func TestProbeGRPC_NotServingThenSucceeds(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !runProbe(ctx, cfg, nil, 0) {
+	if !runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected grpc probe to succeed after server flips to SERVING")
 	}
 }
 
 func TestProbeGRPC_MaxAttemptsCap(t *testing.T) {
 	addr := startGRPCHealthServer(t, healthpb.HealthCheckResponse_NOT_SERVING, "")
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:        "grpc",
 		Address:     addr,
 		Timeout:     config.Duration{Duration: 100 * time.Millisecond},
@@ -443,7 +444,7 @@ func TestProbeGRPC_MaxAttemptsCap(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if runProbe(ctx, cfg, nil, 0) {
+	if runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected grpc probe to give up after MaxAttempts when not SERVING")
 	}
 }
@@ -457,7 +458,7 @@ func TestProbeSettleCancellable(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	cfg := config.ReadinessConfig{
+	cfg := config.ServiceHookConfig{
 		Kind:    "tcp",
 		Address: listenerAddr(l),
 		Timeout: config.Duration{Duration: 200 * time.Millisecond},
@@ -466,7 +467,107 @@ func TestProbeSettleCancellable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	if runProbe(ctx, cfg, nil, 0) {
+	if runProbe(ctx, cfg, nil, 0, nil) {
 		t.Fatal("expected runProbe to return false when settle is interrupted")
 	}
+}
+
+// stubExecer stands in for a ContainerRunner: it records the command the probe
+// asked to run inside the container and returns a fixed host invocation.
+type stubExecer struct {
+	bin  string
+	args []string
+	got  []string
+}
+
+func (s *stubExecer) ExecCommand(cmd []string) (string, []string) {
+	s.got = cmd
+	return s.bin, s.args
+}
+
+func TestProbeContainerExec_ForwardsCommandAndSucceeds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ex := &stubExecer{bin: "sh", args: []string{"-c", "exit 0"}}
+	cfg := config.ServiceHookConfig{
+		Kind:        "container_exec",
+		Command:     &config.Command{Parts: []string{"pg_isready", "-U", "bench"}},
+		Timeout:     config.Duration{Duration: 2 * time.Second},
+		MaxAttempts: 1,
+	}
+
+	if !runProbe(ctx, cfg, nil, 0, ex) {
+		t.Fatal("expected container_exec probe to succeed on exit 0")
+	}
+	// The configured command must reach the backend verbatim — the probe adds
+	// the container and CLI, never rewrites what the user asked to run.
+	want := []string{"pg_isready", "-U", "bench"}
+	if !reflect.DeepEqual(ex.got, want) {
+		t.Errorf("ExecCommand got %v, want %v", ex.got, want)
+	}
+}
+
+func TestProbeContainerExec_NonZeroExitFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ex := &stubExecer{bin: "sh", args: []string{"-c", "exit 1"}}
+	cfg := config.ServiceHookConfig{
+		Kind:        "container_exec",
+		Command:     &config.Command{Parts: []string{"pg_isready"}},
+		Timeout:     config.Duration{Duration: time.Second},
+		Interval:    config.Duration{Duration: 10 * time.Millisecond},
+		MaxAttempts: 2,
+	}
+
+	if runProbe(ctx, cfg, nil, 0, ex) {
+		t.Fatal("expected container_exec probe to fail on non-zero exit")
+	}
+}
+
+func TestProbeContainerExec_NilExecerFails(t *testing.T) {
+	buf := logbuf.New(100)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	cfg := config.ServiceHookConfig{
+		Kind:        "container_exec",
+		Command:     &config.Command{Parts: []string{"pg_isready"}},
+		MaxAttempts: 1,
+	}
+
+	// A process service yields a nil execer; the probe must fail loudly rather
+	// than hang or silently pass.
+	if runProbe(ctx, cfg, buf, 0, nil) {
+		t.Fatal("expected container_exec to fail for a non-container service")
+	}
+	if !logContains(buf, "only valid for a container service") {
+		t.Error("expected the non-container error to be logged")
+	}
+}
+
+func TestProbeContainerExec_MissingCommandFails(t *testing.T) {
+	buf := logbuf.New(100)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	ex := &stubExecer{bin: "true"}
+	cfg := config.ServiceHookConfig{Kind: "container_exec", MaxAttempts: 1}
+
+	if runProbe(ctx, cfg, buf, 0, ex) {
+		t.Fatal("expected container_exec to fail with no command")
+	}
+	if !logContains(buf, "requires a command") {
+		t.Error("expected the missing-command error to be logged")
+	}
+}
+
+func logContains(buf *logbuf.Buffer, substr string) bool {
+	for _, line := range buf.Lines() {
+		if strings.Contains(line.Text, substr) {
+			return true
+		}
+	}
+	return false
 }
