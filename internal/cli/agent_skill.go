@@ -16,14 +16,16 @@ var skillFS embed.FS
 type agentTarget struct {
 	name    string
 	dir     string // config dir relative to home
-	relPath string // skill file relative to dir
+	relPath string // skill file relative to home
 }
 
+const skillRelPath = "skills/workbench/SKILL.md"
+
+// Codex discovers user skills outside its config directory.
 var agentTargets = []agentTarget{
-	{"Claude Code", ".claude", "skills/workbench/SKILL.md"},
-	{"Codex", ".codex", "agents/workbench.md"},
-	{"Gemini Code Assist", ".gemini", "agents/workbench.md"},
-	{"OpenCode", ".config/opencode", "agents/workbench.md"},
+	{"Claude Code", ".claude", ".claude/" + skillRelPath},
+	{"Codex", ".codex", ".agents/" + skillRelPath},
+	{"OpenCode", ".config/opencode", ".config/opencode/" + skillRelPath},
 }
 
 func runAgentSkill(args []string) int {
@@ -67,8 +69,8 @@ func runAgentSkill(args []string) int {
 		}
 		found = append(found, match{
 			name:    t.name,
-			dest:    filepath.Join(base, t.relPath),
-			display: "~/" + filepath.Join(t.dir, t.relPath),
+			dest:    filepath.Join(home, t.relPath),
+			display: "~/" + t.relPath,
 		})
 	}
 

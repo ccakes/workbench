@@ -196,7 +196,7 @@ Press `t` in the TUI to open the trace browser, which has three views:
 
 An embedded [agent skill](docs/agent-skill.md) is included for managing your dev environment through AI coding tools. It lets agents check service status, read logs, start/stop/restart services, and diagnose issues using the `bench` CLI. The skill activates automatically when you ask about services, logs, or your running dev environment.
 
-Run `bench agent-skill` to view the skill and save it to any detected agent tool (Claude Code, Codex, Gemini Code Assist, OpenCode).
+Run `bench agent-skill` to view the skill and save it to any detected agent tool (Claude Code, Codex, OpenCode).
 
 ## Platform Support
 

@@ -12,12 +12,11 @@ This prints the skill content to stdout and detects installed agent tools. If an
 
 Supported tools and their skill paths:
 
-| Tool               | Config detected     | Skill saved to                              |
-|--------------------|---------------------|---------------------------------------------|
-| Claude Code        | `~/.claude/`        | `~/.claude/skills/workbench/SKILL.md`       |
-| Codex              | `~/.codex/`         | `~/.codex/agents/workbench.md`              |
-| Gemini Code Assist | `~/.gemini/`        | `~/.gemini/agents/workbench.md`             |
-| OpenCode           | `~/.config/opencode/` | `~/.config/opencode/agents/workbench.md`  |
+| Tool        | Config detected       | Skill saved to                                    |
+|-------------|-----------------------|---------------------------------------------------|
+| Claude Code | `~/.claude/`           | `~/.claude/skills/workbench/SKILL.md`               |
+| Codex       | `~/.codex/`            | `~/.agents/skills/workbench/SKILL.md`               |
+| OpenCode    | `~/.config/opencode/`  | `~/.config/opencode/skills/workbench/SKILL.md`      |
 
 ### Print only
 
