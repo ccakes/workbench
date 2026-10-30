@@ -119,8 +119,6 @@ func TestStatusSingleService(t *testing.T) {
 	}
 }
 
-// A service in its first second has no uptime (it's truncated to whole
-// seconds), so clients need started_at to show a ticking clock.
 func TestStatusStartedAt(t *testing.T) {
 	_, client, sup := setupServer(t)
 
@@ -146,7 +144,6 @@ func TestStatusStartedAt(t *testing.T) {
 		t.Errorf("got started_at %v, want %v", result.StartedAt, started)
 	}
 
-	// A service that has never started omits started_at.
 	data, err = client.Call("status", map[string]string{"service": "api"})
 	if err != nil {
 		t.Fatalf("status: %v", err)

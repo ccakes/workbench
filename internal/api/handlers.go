@@ -61,8 +61,6 @@ type ServiceStatus struct {
 	WatchEnabled  bool     `json:"watch_enabled"`
 	Ports         []string `json:"ports,omitempty"`
 
-	// StartedAt is exact where Uptime is truncated to whole seconds (and
-	// omitted under 1s), so clients can tick a clock without drift.
 	StartedAt time.Time `json:"started_at,omitzero"`
 }
 

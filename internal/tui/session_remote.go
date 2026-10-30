@@ -390,9 +390,7 @@ func snapFromStatus(s api.ServiceStatus) service.Snapshot {
 		Image:        s.Image,
 		Ports:        s.Ports,
 	}
-	// StartTime lets Snapshot.Uptime() keep ticking between status refreshes.
-	// Prefer the exact started_at; older daemons only send uptime, which is
-	// omitted in a service's first second, so fall back to synthesizing it.
+	// StartTime keeps Snapshot.Uptime() ticking between status refreshes.
 	if !s.StartedAt.IsZero() {
 		snap.StartTime = s.StartedAt
 	} else if s.Uptime != "" {
