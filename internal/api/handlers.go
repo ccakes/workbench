@@ -60,6 +60,10 @@ type ServiceStatus struct {
 	LastLogStream string   `json:"last_log_stream,omitempty"`
 	WatchEnabled  bool     `json:"watch_enabled"`
 	Ports         []string `json:"ports,omitempty"`
+
+	// StartedAt is exact where Uptime is truncated to whole seconds (and
+	// omitted under 1s), so clients can tick a clock without drift.
+	StartedAt time.Time `json:"started_at,omitzero"`
 }
 
 func (s *Server) handleStatus(raw json.RawMessage) (any, error) {
@@ -103,6 +107,7 @@ func (s *Server) buildServiceStatus(key string) ServiceStatus {
 		LastError:    snap.LastError,
 		WatchEnabled: snap.WatchEnabled,
 		Ports:        snap.Ports,
+		StartedAt:    snap.StartTime,
 	}
 	uptime := snap.Uptime()
 	if uptime > 0 {
