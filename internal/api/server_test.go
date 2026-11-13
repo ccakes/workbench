@@ -119,6 +119,40 @@ func TestStatusSingleService(t *testing.T) {
 	}
 }
 
+func TestStatusStartedAt(t *testing.T) {
+	_, client, sup := setupServer(t)
+
+	started := time.Now().Add(-300 * time.Millisecond)
+	info := sup.ServiceInfo("web")
+	info.Lock()
+	info.Status = service.StatusReady
+	info.StartTime = started
+	info.Unlock()
+
+	data, err := client.Call("status", map[string]string{"service": "web"})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	var result ServiceStatus
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Uptime != "" {
+		t.Errorf("got uptime %q, want it omitted under 1s", result.Uptime)
+	}
+	if !result.StartedAt.Equal(started) {
+		t.Errorf("got started_at %v, want %v", result.StartedAt, started)
+	}
+
+	data, err = client.Call("status", map[string]string{"service": "api"})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if strings.Contains(string(data), "started_at") {
+		t.Errorf("never-started service includes started_at: %s", data)
+	}
+}
+
 func TestStatusUnknownService(t *testing.T) {
 	_, client, _ := setupServer(t)
 

@@ -390,9 +390,10 @@ func snapFromStatus(s api.ServiceStatus) service.Snapshot {
 		Image:        s.Image,
 		Ports:        s.Ports,
 	}
-	// Synthesize StartTime from the reported uptime so Snapshot.Uptime() keeps
-	// ticking between status refreshes.
-	if s.Uptime != "" {
+	// StartTime keeps Snapshot.Uptime() ticking between status refreshes.
+	if !s.StartedAt.IsZero() {
+		snap.StartTime = s.StartedAt
+	} else if s.Uptime != "" {
 		if d, err := time.ParseDuration(s.Uptime); err == nil && d > 0 {
 			snap.StartTime = time.Now().Add(-d)
 		}
